@@ -1,0 +1,82 @@
+# glarb bench queue, run by queue.sh after E1. One command per line.
+./e1b.sh 2
+./e7shots.sh 36
+./e1c.sh 8 base
+./e1c.sh 32 base
+./e7shots.sh 36
+./e1c.sh 64 base
+./e1c.sh 64 base 1
+./e1c.sh 64 lowend
+./e1c.sh 64 lite
+./e1d.sh 8 headless
+./e1c.sh 64 base
+./e1c.sh 64 lowend
+./e1c.sh 64 lite
+./e9.sh 20
+./e1d.sh 32 headless
+./e1d.sh 32 cage
+./e2.sh
+sudo systemctl stop 'glarb-e2n*'; mv /var/tmp/glarb-bench/results/e2.tsv /var/tmp/glarb-bench/results/e2-buggy.tsv; ./e2.sh
+./e4.sh wd 20 freeze-reclaim
+./e4.sh wd 20 freeze-reclaim
+./e4.sh wd 20 freeze-reclaim-anon
+./e4.sh wd 20 freeze-reclaim-anon
+./e4.sh wd 20 reclaim-only
+./e4.sh wd 20 freeze-only
+WB=0 ./e4.sh wd 20 freeze-reclaim-anon
+./zswap.sh zsmalloc lz4 && ./e4.sh wd 20 freeze-reclaim-anon && ./e4.sh wd 20 freeze-reclaim-anon
+./zswap.sh zsmalloc zstd && ./e4.sh wd 20 freeze-reclaim-anon && ./e4.sh wd 20 freeze-reclaim-anon && ./e4.sh gh 20 freeze-reclaim-anon && ./e4.sh wiki 20 freeze-reclaim-anon
+./zswap.sh zbud lz4
+./e4.sh gh 20 freeze-reclaim-anon
+./e4.sh wiki 20 freeze-reclaim-anon
+./e4cold.sh wd
+./e4cold.sh wd
+./e4cold.sh wd
+./e5.sh 64
+./zswap.sh zsmalloc lz4 && WB=0 ./e4.sh wd 20 freeze-reclaim-anon && WB=0 ./e4.sh wd 20 freeze-reclaim-anon && WB=0 ./e4.sh gh 20 freeze-reclaim-anon && WB=0 ./e4.sh wiki 20 freeze-reclaim-anon && WB=0 ./e4.sh wd 20 freeze-reclaim-anonfit
+./zswap.sh zsmalloc zstd && WB=0 ./e4.sh wd 20 freeze-reclaim-anon && WB=0 ./e4.sh wd 20 freeze-reclaim-anon && WB=0 ./e4.sh gh 20 freeze-reclaim-anon && WB=0 ./e4.sh wiki 20 freeze-reclaim-anon
+./zswap.sh zbud lz4 && WB=0 ./e4.sh wd 20 freeze-reclaim-anon && WB=0 ./e4.sh gh 20 freeze-reclaim-anon && WB=0 ./e4.sh wiki 20 freeze-reclaim-anon
+./e4criu.sh wd
+./e3setup.sh
+./e3.sh systemd 50
+./e3.sh systemd-root 50
+./e3.sh nspawn 50
+./e3.sh bwrap 50
+./e3.sh crun 50
+./e3.sh runc 50
+SB=off GHOST=512M ./e4criu.sh wd
+./e3.sh docker 50
+./e3.sh podman 50
+sudo systemctl stop e3-dockerd
+pkill -STOP -f "^/var/tmp/glarb-bench/vllm-venv/bin/python /var/tmp/glarb-bench/vllm-venv/bin/hf download"; ./e6.sh; pkill -CONT -f "^/var/tmp/glarb-bench/vllm-venv/bin/python /var/tmp/glarb-bench/vllm-venv/bin/hf download"
+./e8.sh 8
+./e3.sh nspawn 50
+./e3.sh bwrap 50
+./e3.sh podman 50
+M=/var/tmp/glarb-bench/models; until [ -e $M/ui-tars-1.5-7b.done ] || [ -e $M/dl.failed ]; do sleep 30; done; [ -e $M/ui-tars-1.5-7b.done ] && ./e7.sh bf16 "1 4 8 16" 6
+[ -e /var/tmp/glarb-bench/models/ui-tars-1.5-7b.done ] && ./e7.sh bf16-nocache "1 4 8 16" 6
+[ -e /var/tmp/glarb-bench/models/ui-tars-1.5-7b.done ] && ./e7.sh fp8 "1 4 8 16" 6
+[ -e /var/tmp/glarb-bench/models/ui-tars-1.5-7b.done ] && ./e7sleep.sh 1
+M=/var/tmp/glarb-bench/models; until [ -e $M/gpt-oss-20b.done ] || [ -e $M/dl.failed ]; do sleep 30; done; [ -e $M/gpt-oss-20b.done ] && ./e7text.sh mxfp4 "1 4 8 16 32" 6
+[ -e /var/tmp/glarb-bench/models/ui-tars-1.5-7b.done ] && ./e7.sh bf16 "1 4 8 16" 6
+[ -e /var/tmp/glarb-bench/models/ui-tars-1.5-7b.done ] && ./e7.sh bf16-nocache "1 4 8 16" 6
+[ -e /var/tmp/glarb-bench/models/ui-tars-1.5-7b.done ] && ./e7.sh fp8 "1 4 8 16" 6
+[ -e /var/tmp/glarb-bench/models/ui-tars-1.5-7b.done ] && ./e7sleep.sh 1
+M=/var/tmp/glarb-bench/models; until [ -e $M/gpt-oss-20b.done ] || [ -e $M/dl.failed ]; do sleep 30; done; [ -e $M/gpt-oss-20b.done ] && ./e7text.sh mxfp4 "1 4 8 16 32" 6
+./e10.sh tick 8
+./e10.sh spin 8
+./e10.sh gh 8
+./e10.sh wd 8
+./e10.sh cnn 8
+M=/var/tmp/glarb-bench/models; until [ -e $M/gpt-oss-20b.done ] || [ -e $M/dl.failed ]; do sleep 30; done; [ -e $M/gpt-oss-20b.done ] && ./e7text.sh mxfp4 "1 4 8 16 32" 6
+./e11.sh 8
+./e11.sh 32
+./e10b.sh tick 8
+./e10b.sh spin 8
+./e10b.sh gh 8
+./e10b.sh wd 8
+./e10b.sh cnn 8
+./zswap.sh zsmalloc zstd; for p in gh wd wiki; do WB=0 FLAGS=proc ./e4.sh $p 20 freeze-reclaim-anon; done; ./zswap.sh zbud lz4
+MODES="freeze hz 2hz visible" ./e10b.sh gh 8
+MODES="freeze hz 2hz visible" ./e10b.sh wd 8
+END

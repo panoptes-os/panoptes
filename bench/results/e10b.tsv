@@ -1,0 +1,35 @@
+p=tick n=8 mode=fresh	fresh_now=yes fresh_hidden=yes	refs=4cd58222,bda2d980 now=4cd58222,bda2d980 hidden=4cd58222,bda2d980
+p=tick n=8 mode=steps-visible	per_agent_cpu_pct=11.82 steps=120 timeouts=0 round_s=4.0	show_ms=10/10 first_shot_ms=49/69 step_ms=399/419 (p50/p95)
+p=tick n=8 mode=steps-2hz	per_agent_cpu_pct=3.63 steps=120 timeouts=0 round_s=4.0	show_ms=9/10 first_shot_ms=53/79 step_ms=410/595 (p50/p95)
+p=tick n=8 mode=steps-hz	per_agent_cpu_pct=3.70 steps=120 timeouts=0 round_s=4.0	show_ms=10/11 first_shot_ms=55/72 step_ms=403/422 (p50/p95)
+p=tick n=8 mode=steps-freeze	per_agent_cpu_pct=2.04 steps=120 timeouts=0 round_s=4.0	show_ms=10/10 first_shot_ms=60/78 step_ms=404/437 (p50/p95)
+p=spin n=8 mode=fresh	fresh_now=no fresh_hidden=no	refs=bdeeacb6,314b3f7b now=ec0454e2,cd11c8ba hidden=456d9c04,acbe2b47
+p=spin n=8 mode=steps-visible	per_agent_cpu_pct=3.94 steps=120 timeouts=0 round_s=4.0	show_ms=9/10 first_shot_ms=59/64 step_ms=428/446 (p50/p95)
+p=spin n=8 mode=steps-2hz	per_agent_cpu_pct=1.10 steps=112 timeouts=0 round_s=4.6	show_ms=9/10 first_shot_ms=51/63 step_ms=493/994 (p50/p95)
+p=spin n=8 mode=steps-hz	per_agent_cpu_pct=1.35 steps=120 timeouts=0 round_s=4.0	show_ms=10/11 first_shot_ms=53/57 step_ms=425/442 (p50/p95)
+p=spin n=8 mode=steps-freeze	per_agent_cpu_pct=1.18 steps=120 timeouts=0 round_s=4.0	show_ms=9/10 first_shot_ms=72/88 step_ms=458/476 (p50/p95)
+p=gh n=8 mode=fresh	fresh_now=yes fresh_hidden=yes	refs=4cd58222,bda2d980 now=4cd58222,bda2d980 hidden=4cd58222,bda2d980
+p=gh n=8 mode=steps-visible	per_agent_cpu_pct=1.73 steps=120 timeouts=0 round_s=4.0	show_ms=9/10 first_shot_ms=30/39 step_ms=373/395 (p50/p95)
+p=gh n=8 mode=steps-2hz	per_agent_cpu_pct=0.86 steps=120 timeouts=0 round_s=4.0	show_ms=9/10 first_shot_ms=34/38 step_ms=368/388 (p50/p95)
+p=gh n=8 mode=steps-hz	per_agent_cpu_pct=0.93 steps=120 timeouts=0 round_s=4.0	show_ms=10/11 first_shot_ms=29/40 step_ms=368/383 (p50/p95)
+p=gh n=8 mode=steps-freeze	per_agent_cpu_pct=0.84 steps=120 timeouts=0 round_s=4.0	show_ms=9/10 first_shot_ms=39/50 step_ms=378/395 (p50/p95)
+p=wd n=8 mode=fresh	fresh_now=yes fresh_hidden=yes	refs=4cd58222,bda2d980 now=4cd58222,bda2d980 hidden=4cd58222,bda2d980
+p=wd n=8 mode=steps-visible	per_agent_cpu_pct=1.03 steps=120 timeouts=0 round_s=4.0	show_ms=9/10 first_shot_ms=28/38 step_ms=360/383 (p50/p95)
+p=wd n=8 mode=steps-2hz	per_agent_cpu_pct=0.81 steps=120 timeouts=0 round_s=4.0	show_ms=9/10 first_shot_ms=35/37 step_ms=368/387 (p50/p95)
+p=wd n=8 mode=steps-hz	per_agent_cpu_pct=0.88 steps=120 timeouts=0 round_s=4.0	show_ms=10/11 first_shot_ms=29/40 step_ms=368/385 (p50/p95)
+p=wd n=8 mode=steps-freeze	per_agent_cpu_pct=0.79 steps=120 timeouts=0 round_s=4.0	show_ms=9/10 first_shot_ms=39/50 step_ms=378/395 (p50/p95)
+p=cnn n=8 mode=fresh	fresh_now=yes fresh_hidden=yes	refs=4cd58222,bda2d980 now=4cd58222,bda2d980 hidden=4cd58222,bda2d980
+p=cnn n=8 mode=steps-visible pos=1	per_agent_cpu_pct=306.58 steps=96 timeouts=0 round_s=5.7	show_ms=19/37 first_shot_ms=124/373 step_ms=578/1297 (p50/p95)
+p=cnn n=8 mode=steps-2hz pos=2	per_agent_cpu_pct=179.83 steps=80 timeouts=0 round_s=6.1	show_ms=12/19 first_shot_ms=87/156 step_ms=545/1343 (p50/p95)
+p=cnn n=8 mode=steps-hz pos=3	per_agent_cpu_pct=167.26 steps=120 timeouts=0 round_s=4.1	show_ms=16/29 first_shot_ms=86/131 step_ms=489/559 (p50/p95)
+p=cnn n=8 mode=steps-freeze pos=4	per_agent_cpu_pct=22.10 steps=120 timeouts=0 round_s=4.0	show_ms=12/15 first_shot_ms=70/93 step_ms=446/478 (p50/p95)
+p=gh n=8 mode=fresh	fresh_now=yes fresh_hidden=yes	refs=4cd58222,bda2d980 now=4cd58222,bda2d980 hidden=4cd58222,bda2d980
+p=gh n=8 mode=steps-freeze pos=1	per_agent_cpu_pct=1.85 steps=120 timeouts=0 round_s=4.0	show_ms=10/11 first_shot_ms=38/47 step_ms=381/401 (p50/p95)
+p=gh n=8 mode=steps-hz pos=2	per_agent_cpu_pct=0.89 steps=120 timeouts=0 round_s=4.0	show_ms=10/11 first_shot_ms=29/40 step_ms=360/385 (p50/p95)
+p=gh n=8 mode=steps-2hz pos=3	per_agent_cpu_pct=0.91 steps=120 timeouts=0 round_s=4.0	show_ms=9/10 first_shot_ms=35/38 step_ms=368/387 (p50/p95)
+p=gh n=8 mode=steps-visible pos=4	per_agent_cpu_pct=0.84 steps=120 timeouts=0 round_s=4.0	show_ms=9/10 first_shot_ms=23/39 step_ms=359/389 (p50/p95)
+p=wd n=8 mode=fresh	fresh_now=yes fresh_hidden=yes	refs=4cd58222,bda2d980 now=4cd58222,bda2d980 hidden=4cd58222,bda2d980
+p=wd n=8 mode=steps-freeze pos=1	per_agent_cpu_pct=1.17 steps=120 timeouts=0 round_s=4.0	show_ms=10/11 first_shot_ms=39/49 step_ms=365/395 (p50/p95)
+p=wd n=8 mode=steps-hz pos=2	per_agent_cpu_pct=0.84 steps=120 timeouts=0 round_s=4.0	show_ms=10/11 first_shot_ms=29/41 step_ms=359/388 (p50/p95)
+p=wd n=8 mode=steps-2hz pos=3	per_agent_cpu_pct=0.86 steps=120 timeouts=0 round_s=4.0	show_ms=9/10 first_shot_ms=35/37 step_ms=368/387 (p50/p95)
+p=wd n=8 mode=steps-visible pos=4	per_agent_cpu_pct=0.79 steps=120 timeouts=0 round_s=4.0	show_ms=9/10 first_shot_ms=23/38 step_ms=361/388 (p50/p95)

@@ -1,0 +1,120 @@
+{
+  "provider": "SET",
+  "providers": {
+    "deepseek": {
+      "base_url": "https://inference.baseten.co/v1",
+      "model": "deepseek-ai/DeepSeek-V4-Flash-0731",
+      "key_file": "/home/user/.config/panoptes/baseten.key",
+      "auth": "api-key",
+      "json_mode": true,
+      "max_concurrency": 1,
+      "retries": 8,
+      "timeout_s": 180,
+      "max_tokens": 4096,
+      "price": {
+        "input": 0.13,
+        "output": 0.26,
+        "cached": 0.028
+      }
+    },
+    "gptoss-low": {
+      "base_url": "https://inference.baseten.co/v1",
+      "model": "openai/gpt-oss-120b",
+      "key_file": "/home/user/.config/panoptes/baseten.key",
+      "auth": "api-key",
+      "json_mode": true,
+      "max_concurrency": 1,
+      "retries": 8,
+      "timeout_s": 180,
+      "max_tokens": 8192,
+      "extra": {
+        "reasoning_effort": "low"
+      },
+      "price": {
+        "input": 0.10,
+        "output": 0.50,
+        "cached": 0.10
+      }
+    },
+    "gptoss-medium": {
+      "base_url": "https://inference.baseten.co/v1",
+      "model": "openai/gpt-oss-120b",
+      "key_file": "/home/user/.config/panoptes/baseten.key",
+      "auth": "api-key",
+      "json_mode": true,
+      "max_concurrency": 1,
+      "retries": 8,
+      "timeout_s": 180,
+      "max_tokens": 8192,
+      "extra": {
+        "reasoning_effort": "medium"
+      },
+      "price": {
+        "input": 0.10,
+        "output": 0.50,
+        "cached": 0.10
+      }
+    },
+    "k3": {
+      "base_url": "https://inference.baseten.co/v1",
+      "model": "moonshotai/Kimi-K3",
+      "key_file": "/home/user/.config/panoptes/baseten.key",
+      "auth": "api-key",
+      "json_mode": true,
+      "max_concurrency": 1,
+      "retries": 8,
+      "timeout_s": 240,
+      "max_tokens": 8192,
+      "price": {
+        "input": 3.00,
+        "output": 15.00,
+        "cached": 0.30
+      }
+    }
+  },
+  "tasks": {
+    "truth": "/var/tmp/glarb-bench/demo/data/truth.jsonl",
+    "creds": "/var/tmp/glarb-bench/demo/data/creds.tsv"
+  },
+  "desk": {
+    "launch": [
+      "sudo",
+      "systemd-run",
+      "--quiet",
+      "--collect",
+      "--unit=pdesk-gate-{i}",
+      "--slice=panoptes.slice",
+      "-p",
+      "User=user",
+      "-p",
+      "Group=user",
+      "-p",
+      "Delegate=yes",
+      "-p",
+      "StandardOutput=file:{run}/desk.log",
+      "-p",
+      "StandardError=file:{run}/desk.log",
+      "-p",
+      "Environment=PANOPTES_PDFTOTEXT=/nix/store/q0ld5mmjh89nar306jb0izrcf8phy5v9-poppler-utils-26.10.0/bin/pdftotext",
+      "sh",
+      "-c",
+      ". /var/tmp/glarb-bench/scripts/env.sh; exec /var/tmp/glarb-bench/panoptes-gate/target/release/panoptes-desk --run-dir {run} --size 1280x800"
+    ],
+    "stop": [
+      "sh",
+      "-c",
+      "sudo systemctl stop pdesk-gate-{i} 2>/dev/null; sudo systemctl reset-failed pdesk-gate-{i} 2>/dev/null; true"
+    ]
+  },
+  "out_dir": "/var/tmp/glarb-bench/panoptes-run/gate",
+  "run_name": "SET",
+  "step_cap": 60,
+  "acting_cap": 1,
+  "phase_caps": {},
+  "budget": {
+    "ledger": "/var/tmp/glarb-bench/panoptes-run/gate/spent.usd",
+    "cap_usd": 4.50
+  },
+  "invoice_cost_cap_usd": 0.5,
+  "history_full": 1
+}

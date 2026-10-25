@@ -1,0 +1,19 @@
+{
+  "provider": "oracle",
+  "providers": {
+    "oracle": { "base_url": "http://127.0.0.1:8099/v1", "model": "oracle",
+                "http2_prior_knowledge": true, "max_concurrency": 16, "retries": 3, "timeout_s": 60 }
+  },
+  "tasks": { "truth": "/var/tmp/glarb-bench/demo/data/truth.jsonl",
+             "creds": "/var/tmp/glarb-bench/demo/data/creds.tsv" },
+  "desk": {
+    "launch": ["sudo", "systemd-run", "--quiet", "--collect", "--unit=pdesk-loop-{i}", "--slice=panoptes.slice",
+               "-p", "User=user", "-p", "Group=user", "-p", "Delegate=yes",
+               "-p", "StandardOutput=file:{run}/desk.log", "-p", "StandardError=file:{run}/desk.log",
+               "sh", "-c", ". /var/tmp/glarb-bench/scripts/env.sh; exec /var/tmp/glarb-bench/panoptes/target/release/panoptes-desk --run-dir {run} --size 1280x800"],
+    "stop": ["sh", "-c", "sudo systemctl stop pdesk-loop-{i} 2>/dev/null; sudo systemctl reset-failed pdesk-loop-{i} 2>/dev/null; true"]
+  },
+  "out_dir": "/var/tmp/glarb-bench/panoptes-run/loop",
+  "run_name": "RUN",
+  "step_cap": 80
+}

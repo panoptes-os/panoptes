@@ -1,0 +1,17 @@
+[package]
+name = "panoptes-oracle"
+description = "A scripted OpenAI-compatible model that walks the invoice-entry flow from ground truth, for testing the agent harness"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axum = { workspace = true, features = ["http2"] }
+futures-util.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,5 @@
+p=spin n=2 mode=fresh	fresh_now=no fresh_hidden=no	refs=e1babe57,e1bee27e now=420b66b8,acd0f861 hidden=b7fd297a,e093a8c7
+p=spin n=2 mode=steps-visible	per_agent_cpu_pct=5.37 steps=6 timeouts=0 round_s=4.0	show_ms=9/11 first_shot_ms=60/66 step_ms=435/457 (p50/p95)
+p=spin n=2 mode=steps-2hz	per_agent_cpu_pct=1.24 steps=6 timeouts=0 round_s=4.0	show_ms=10/12 first_shot_ms=100/107 step_ms=492/858 (p50/p95)
+p=spin n=2 mode=steps-hz	per_agent_cpu_pct=2.72 steps=6 timeouts=0 round_s=4.0	show_ms=13/24 first_shot_ms=73/110 step_ms=470/516 (p50/p95)
+p=spin n=2 mode=steps-freeze	per_agent_cpu_pct=3.88 steps=6 timeouts=0 round_s=4.0	show_ms=26/35 first_shot_ms=121/145 step_ms=531/568 (p50/p95)

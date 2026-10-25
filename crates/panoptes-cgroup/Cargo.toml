@@ -1,0 +1,15 @@
+[package]
+name = "panoptes-cgroup"
+description = "cgroup v2 control for Panoptes: freeze, reclaim, weights, spawn into a group"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+libc.workspace = true
+rustix.workspace = true
+
+[lints]
+workspace = true

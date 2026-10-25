@@ -1,0 +1,51 @@
+n_agents	700	count
+setup_base_s	1.859	s
+setup_netns_s	0.455	s
+setup_veth_s	4.023	s
+setup_addr_s	12.888	s
+setup_total_s	18.248	s
+mem_per_agent_avail_kb	546	kB
+mem_per_agent_slab_kb	542	kB
+mem_per_agent_sunreclaim_kb	524	kB
+mem_per_agent_percpu_kb	148	kB
+mem_per_agent_kstack_kb	0	kB
+slab_per_agent_kmalloc-cg-4k	83.2	kB
+slab_per_agent_kmalloc-cg-2k	50.0	kB
+slab_per_agent_kernfs_node_cache	46.0	kB
+slab_per_agent_kmalloc-rnd-08-512	35.8	kB
+slab_per_agent_kmalloc-rnd-11-8k	16.0	kB
+slab_per_agent_kmalloc-rnd-07-2k	15.9	kB
+reach_ok	511/700	agents
+reach_all_s	23.781	s
+deny_curl_rc	28	rc (28 = timed out, dropped)
+deny_counter_bytes	180	bytes
+neigh_rtr_br0	514	entries
+arp_cache_table_fulls	0000002c	hex
+arp_cache_forced_gc	0000002f	hex
+a2a_ping_rc_open	0	rc (0 = agents reach each other at L2)
+a2a_ping_rc_isolated	1	rc (1 = blocked)
+isolated_still_reaches_site	0	rc
+lat_vpn	20 20 0 398.0 0.019 0.030	n ok err Mbps p50_s p95_s
+lat_direct	20 20 0 1212.4 0.001 0.001	n ok err Mbps p50_s p95_s
+tput_vpn	883 882 1 504.3 0.620 3.467	n ok err Mbps p50_s p95_s
+openvpn_client_cpu	50	% of one core
+openvpn_server_cpu	62	% of one core
+host_busy_during_vpn	82	% of 32 threads
+tput_direct	20135 20135 0 12084.9 0.026 0.043	n ok err Mbps p50_s p95_s
+flip_100_s	0.009	s
+flip_route_a1		route
+unflip_100_s	0.024	s
+flip_fetches	5666 5649 17 2210.7 0.002 0.391	n ok err Mbps p50_s p95_s
+flip_window_bytes_via	tun 19699998 u0 10080838	bytes, 10 s before flip + 10 s flipped
+drop_kill_switch_restart	2.384 2.395	s to tunnel up, s to route restored
+drop_kill_switch_outage	started 46 ok 7 rc7=12 rc28=27	fetches started while down
+drop_kill_switch_recover	0.16	s from route restored to first good fetch
+drop_kill_switch_leak_bytes_u0	0	bytes from VPN agents out the direct path
+drop_no_kill_switch_restart	7.236 7.263	s to tunnel up, s to route restored
+drop_no_kill_switch_outage	started 7803 ok 7797 rc28=6	fetches started while down
+drop_no_kill_switch_recover	0.17	s from route restored to first good fetch
+drop_no_kill_switch_leak_bytes_u0	16457706	bytes from VPN agents out the direct path
+teardown_cmd_s	0.116	s
+teardown_settle_s	60.631	s (Percpu back within 2%)
+host_snapshot_diff	0	lines (identical)
+modules_loaded_by_test		names

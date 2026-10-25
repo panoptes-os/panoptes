@@ -1,0 +1,45 @@
+p=tick n=8 mode=fresh	hidden_state=hidden capture_fresh=yes refs=4cd58222,bda2d980 hidden=4cd58222,bda2d980
+p=tick n=8 mode=visible60	per_agent_cpu_pct=11.29
+p=tick n=8 mode=visible10	per_agent_cpu_pct=6.82
+p=tick n=8 mode=visible2	per_agent_cpu_pct=1.81
+p=tick n=8 mode=hidden-min	per_agent_cpu_pct=0.07
+p=tick n=8 mode=steps-hide-min	per_agent_cpu_pct=2.08 steps=120 timeouts=0	show_ms=2/3 first_shot_ms=55/69 step_ms=405/440 (p50/p95)
+p=tick n=8 mode=hidden-cdp	per_agent_cpu_pct=0.05
+p=tick n=8 mode=steps-hide-cdp	per_agent_cpu_pct=2.00 steps=120 timeouts=0	show_ms=4/5 first_shot_ms=48/77 step_ms=406/439 (p50/p95)
+p=tick n=8 mode=steps-visible	per_agent_cpu_pct=11.91 steps=120 timeouts=0	show_ms=0/0 first_shot_ms=40/59 step_ms=391/409 (p50/p95)
+p=spin n=8 mode=fresh	hidden_state=hidden capture_fresh=no refs=bc7b38d1,a9005f59 hidden=9c07393b,965610c4
+p=spin n=8 mode=visible60	per_agent_cpu_pct=3.37
+p=spin n=8 mode=visible10	per_agent_cpu_pct=0.76
+p=spin n=8 mode=visible2	per_agent_cpu_pct=0.24
+p=spin n=8 mode=hidden-min	per_agent_cpu_pct=0.01
+p=spin n=8 mode=steps-hide-min	per_agent_cpu_pct=1.31 steps=120 timeouts=0	show_ms=2/3 first_shot_ms=59/61 step_ms=444/449 (p50/p95)
+p=spin n=8 mode=hidden-cdp	per_agent_cpu_pct=0.03
+p=spin n=8 mode=steps-hide-cdp	per_agent_cpu_pct=1.23 steps=120 timeouts=0	show_ms=2/3 first_shot_ms=42/60 step_ms=427/448 (p50/p95)
+p=spin n=8 mode=steps-visible	per_agent_cpu_pct=3.88 steps=120 timeouts=0	show_ms=0/0 first_shot_ms=51/68 step_ms=427/461 (p50/p95)
+p=gh n=8 mode=fresh	hidden_state=hidden capture_fresh=yes refs=4cd58222,bda2d980 hidden=4cd58222,bda2d980
+p=gh n=8 mode=visible60	per_agent_cpu_pct=0.07
+p=gh n=8 mode=visible10	per_agent_cpu_pct=0.04
+p=gh n=8 mode=visible2	per_agent_cpu_pct=0.03
+p=gh n=8 mode=hidden-min	per_agent_cpu_pct=0.02
+p=gh n=8 mode=steps-hide-min	per_agent_cpu_pct=2.02 steps=120 timeouts=0	show_ms=3/3 first_shot_ms=43/51 step_ms=387/405 (p50/p95)
+p=gh n=8 mode=hidden-cdp	per_agent_cpu_pct=0.03
+p=gh n=8 mode=steps-hide-cdp	per_agent_cpu_pct=1.08 steps=120 timeouts=0	show_ms=2/2 first_shot_ms=39/52 step_ms=364/397 (p50/p95)
+p=gh n=8 mode=steps-visible	per_agent_cpu_pct=0.84 steps=120 timeouts=0	show_ms=0/0 first_shot_ms=13/30 step_ms=351/380 (p50/p95)
+p=wd n=8 mode=fresh	hidden_state=hidden capture_fresh=yes refs=4cd58222,bda2d980 hidden=4cd58222,bda2d980
+p=wd n=8 mode=visible60	per_agent_cpu_pct=0.19
+p=wd n=8 mode=visible10	per_agent_cpu_pct=0.04
+p=wd n=8 mode=visible2	per_agent_cpu_pct=0.03
+p=wd n=8 mode=hidden-min	per_agent_cpu_pct=0.03
+p=wd n=8 mode=steps-hide-min	per_agent_cpu_pct=1.28 steps=120 timeouts=0	show_ms=2/3 first_shot_ms=42/51 step_ms=378/398 (p50/p95)
+p=wd n=8 mode=hidden-cdp	per_agent_cpu_pct=0.04
+p=wd n=8 mode=steps-hide-cdp	per_agent_cpu_pct=1.04 steps=120 timeouts=0	show_ms=2/3 first_shot_ms=36/63 step_ms=364/397 (p50/p95)
+p=wd n=8 mode=steps-visible	per_agent_cpu_pct=0.78 steps=120 timeouts=0	show_ms=0/0 first_shot_ms=13/29 step_ms=350/378 (p50/p95)
+p=cnn n=8 mode=fresh	hidden_state=hidden capture_fresh=yes refs=4cd58222,bda2d980 hidden=4cd58222,bda2d980
+p=cnn n=8 mode=visible60	per_agent_cpu_pct=345.25
+p=cnn n=8 mode=visible10	per_agent_cpu_pct=156.56
+p=cnn n=8 mode=visible2	per_agent_cpu_pct=138.45
+p=cnn n=8 mode=hidden-min	per_agent_cpu_pct=0.33
+p=cnn n=8 mode=steps-hide-min	per_agent_cpu_pct=21.64 steps=120 timeouts=0	show_ms=3/3 first_shot_ms=67/83 step_ms=447/511 (p50/p95)
+p=cnn n=8 mode=hidden-cdp	per_agent_cpu_pct=0.21
+p=cnn n=8 mode=steps-hide-cdp	per_agent_cpu_pct=25.81 steps=120 timeouts=0	show_ms=4/9 first_shot_ms=71/88 step_ms=457/493 (p50/p95)
+p=cnn n=8 mode=steps-visible	per_agent_cpu_pct=300.18 steps=88 timeouts=0	show_ms=0/0 first_shot_ms=80/409 step_ms=495/1466 (p50/p95)

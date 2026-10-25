@@ -1,0 +1,22 @@
+bf16	server	up_s=64 KV cache size: 58,144 tokens gpu_mib=20424
+bf16	agents=1 steps=6	wall_s=10.4 steps_per_s=0.58	step_ms_p50=1691 p95=1770 max=1770	prompt_tok_mean=5566 cached_tok_mean=4322	ttft_ms=450 prefill_ms=433 decode_ms=1253 queue_ms=0 hit_rate=0.78 kv_max=0.151665 preemptions=0 errors=0
+bf16	agents=4 steps=6	wall_s=18.5 steps_per_s=1.30	step_ms_p50=2991 p95=3237 max=3253	prompt_tok_mean=5573 cached_tok_mean=4328	ttft_ms=1220 prefill_ms=1011 decode_ms=1818 queue_ms=18 hit_rate=0.78 kv_max=0.548032 preemptions=0 errors=0
+bf16	agents=8 steps=6	wall_s=32.2 steps_per_s=1.49	step_ms_p50=4827 p95=6857 max=8069	prompt_tok_mean=5574 cached_tok_mean=4223	ttft_ms=2260 prefill_ms=1528 decode_ms=2778 queue_ms=444 hit_rate=0.76 kv_max=0.945775 preemptions=0 errors=0
+bf16	agents=16 steps=6	wall_s=139.9 steps_per_s=0.69	step_ms_p50=22061 p95=41665 max=43759	prompt_tok_mean=5575 cached_tok_mean=1739	ttft_ms=10722 prefill_ms=2371 decode_ms=11010 queue_ms=7900 hit_rate=0.31 kv_max=0.987614 preemptions=1 errors=0
+bf16-nocache	server	up_s=43 KV cache size: 58,144 tokens gpu_mib=20424
+bf16-nocache	agents=1 steps=6	wall_s=16.1 steps_per_s=0.37	step_ms_p50=2477 p95=3479 max=3479	prompt_tok_mean=5569 cached_tok_mean=0	ttft_ms=1390 prefill_ms=1374 decode_ms=1266 queue_ms=0 hit_rate=- kv_max=0.152216 preemptions=0 errors=0
+bf16-nocache	agents=4 steps=6	wall_s=47.5 steps_per_s=0.51	step_ms_p50=6603 p95=12955 max=12990	prompt_tok_mean=5571 cached_tok_mean=0	ttft_ms=3627 prefill_ms=2529 decode_ms=4222 queue_ms=800 hit_rate=- kv_max=0.605835 preemptions=0 errors=0
+bf16-nocache	agents=8 steps=6	wall_s=94.9 steps_per_s=0.51	step_ms_p50=15770 p95=23536 max=25828	prompt_tok_mean=5574 cached_tok_mean=0	ttft_ms=5398 prefill_ms=2818 decode_ms=9990 queue_ms=2162 hit_rate=- kv_max=0.905588 preemptions=0 errors=0
+bf16-nocache	agents=16 steps=6	wall_s=191.0 steps_per_s=0.50	step_ms_p50=28473 p95=46500 max=50075	prompt_tok_mean=5574 cached_tok_mean=0	ttft_ms=14839 prefill_ms=2695 decode_ms=14834 queue_ms=11655 hit_rate=- kv_max=1.000000 preemptions=1 errors=0
+fp8	server	up_s=66 KV cache size: 176,368 tokens gpu_mib=20004
+fp8	agents=1 steps=6	wall_s=7.3 steps_per_s=0.82	step_ms_p50=1171 p95=1245 max=1245	prompt_tok_mean=5562 cached_tok_mean=4322	ttft_ms=483 prefill_ms=466 decode_ms=697 queue_ms=0 hit_rate=0.78 kv_max=0.049991 preemptions=0 errors=0
+fp8	agents=4 steps=6	wall_s=16.1 steps_per_s=1.49	step_ms_p50=2622 p95=2836 max=2839	prompt_tok_mean=5569 cached_tok_mean=4318	ttft_ms=1448 prefill_ms=1234 decode_ms=1194 queue_ms=141 hit_rate=0.78 kv_max=0.179459 preemptions=0 errors=0
+fp8	agents=8 steps=6	wall_s=28.2 steps_per_s=1.70	step_ms_p50=4619 p95=5041 max=5056	prompt_tok_mean=5571 cached_tok_mean=4328	ttft_ms=2596 prefill_ms=1683 decode_ms=2058 queue_ms=792 hit_rate=0.78 kv_max=0.352658 preemptions=0 errors=0
+fp8	agents=16 steps=6	wall_s=53.4 steps_per_s=1.80	step_ms_p50=8909 p95=10433 max=11648	prompt_tok_mean=5572 cached_tok_mean=4329	ttft_ms=3705 prefill_ms=1918 decode_ms=5133 queue_ms=1374 hit_rate=0.78 kv_max=0.700780 preemptions=0 errors=0
+sleep	level=1 http=200	sleep_ms=6825 wake_ms=1792	gpu_mib awake=20868 asleep=998 woken=20486	host_avail_drop_mib=30432	step_ms warm=1672 first_after_wake=1914
+mxfp4	server	up_s=59 KV cache size: 225,423 tokens gpu_mib=21666
+mxfp4	agents=1 steps=6	wall_s=5.5 steps_per_s=1.09	step_ms_p50=854 p95=1047 max=1047	prompt_tok_mean=10387 cached_tok_mean=7504	ttft_ms=494 prefill_ms=491 decode_ms=402 queue_ms=0 hit_rate=0.72 kv_max=0.079316 preemptions=0 errors=0
+mxfp4	agents=4 steps=6	wall_s=15.3 steps_per_s=1.57	step_ms_p50=2422 p95=3090 max=3090	prompt_tok_mean=10589 cached_tok_mean=7832	ttft_ms=1324 prefill_ms=987 decode_ms=1189 queue_ms=205 hit_rate=0.74 kv_max=0.278612 preemptions=0 errors=0
+mxfp4	agents=8 steps=6	wall_s=27.5 steps_per_s=1.75	step_ms_p50=4459 p95=5654 max=5659	prompt_tok_mean=10525 cached_tok_mean=7779	ttft_ms=1782 prefill_ms=1088 decode_ms=2762 queue_ms=493 hit_rate=0.74 kv_max=0.535227 preemptions=0 errors=0
+mxfp4	agents=16 steps=6	wall_s=66.0 steps_per_s=1.45	step_ms_p50=9248 p95=19000 max=20159	prompt_tok_mean=10556 cached_tok_mean=6893	ttft_ms=2507 prefill_ms=1286 decode_ms=7936 queue_ms=951 hit_rate=0.65 kv_max=0.944504 preemptions=0 errors=0
+mxfp4	agents=32 steps=6	wall_s=276.0 steps_per_s=0.70	step_ms_p50=27914 p95=86605 max=91524	prompt_tok_mean=10546 cached_tok_mean=2056	ttft_ms=24072 prefill_ms=2095 decode_ms=17441 queue_ms=21703 hit_rate=0.19 kv_max=0.985922 preemptions=0 errors=0

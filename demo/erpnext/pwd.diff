@@ -1,0 +1,22 @@
+--- a/pwd.yml (upstream frappe_docker)
++++ b/pwd.yml
+@@ -14,6 +14,9 @@
+       DB_PORT: "3306"
+       MYSQL_ROOT_PASSWORD: admin
+       MARIADB_ROOT_PASSWORD: admin
++      GUNICORN_WORKERS: "8"
++      GUNICORN_THREADS: "4"
++      GUNICORN_TIMEOUT: "120"
+     depends_on:
+       configurator:
+         condition: service_completed_successfully
+@@ -101,6 +104,9 @@
+       - --character-set-server=utf8mb4
+       - --collation-server=utf8mb4_unicode_ci
+       - --skip-character-set-client-handshake
++      - --innodb-snapshot-isolation=OFF
++      - --max-connections=500
++      - --innodb-buffer-pool-size=1G
+     environment:
+       MYSQL_ROOT_PASSWORD: admin
+       MARIADB_ROOT_PASSWORD: admin

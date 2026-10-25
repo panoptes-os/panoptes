@@ -1,0 +1,31 @@
+vllm	server	up_ms=33443 gpu_mib=22526 rss_mib=4115
+vllm	idle	cpu_pct=0.33
+vllm	agents=8 steps=6	wall_s=27.5 steps_per_s=1.75	step_ms_p50=4488 p95=5642 max=5651	prompt_tok_mean=10525 cached_tok_mean=7761 hit_rate=0.74 errors=0 kv_max=0.471041 gpu_mib=22640 rss_mib=4128
+vllm-sleep	sleep	up_ms=54558 gpu_awake_mib=21770 gpu_asleep_mib=1190 sleep_ms=6177 wake_ms=1665 first_step_after_wake_ms=853
+llama	server parallel=1	up_ms=6213 gpu_mib=12986 rss_mib=1821 
+llama	agents=1 steps=6	wall_s=6.3 steps_per_s=0.95	step_ms_p50=1008 p95=1129 max=1129	prompt_tok_mean=10402 cached_tok_mean=7675 hit_rate=0.74 errors=0 kv_max=- gpu_mib=12990 rss_mib=2077
+llama	server parallel=4	up_ms=2670 gpu_mib=14492 rss_mib=1885 
+llama	agents=4 steps=6	wall_s=27.8 steps_per_s=0.86	step_ms_p50=4276 p95=5886 max=5889	prompt_tok_mean=10604 cached_tok_mean=7731 hit_rate=0.73 errors=0 kv_max=- gpu_mib=14504 rss_mib=2361
+llama	server parallel=8	up_ms=2669 gpu_mib=16504 rss_mib=1970 
+llama	idle	cpu_pct=4.13
+llama	agents=8 steps=6	wall_s=69.0 steps_per_s=0.70	step_ms_p50=11473 p95=15957 max=15963	prompt_tok_mean=10541 cached_tok_mean=7637 hit_rate=0.72 errors=0 kv_max=- gpu_mib=16514 rss_mib=2793
+llama	server parallel=16	up_ms=2699 gpu_mib=18930 rss_mib=2078 
+llama	agents=16 steps=6	wall_s=199.4 steps_per_s=0.48	step_ms_p50=32974 p95=48085 max=52124	prompt_tok_mean=9196 cached_tok_mean=6265 hit_rate=0.68 errors=16 kv_max=- gpu_mib=18944 rss_mib=3028
+llama	server parallel=32	up_ms=2718 gpu_mib=18980 rss_mib=2093 
+llama	agents=32 steps=6	wall_s=640.1 steps_per_s=0.30	step_ms_p50=84890 p95=170299 max=250546	prompt_tok_mean=7464 cached_tok_mean=1357 hit_rate=0.18 errors=64 kv_max=- gpu_mib=18996 rss_mib=5478
+llama-ub2048	server parallel=8	up_ms=2812 gpu_mib=17302 rss_mib=2528 
+llama-ub2048	idle	cpu_pct=0.03
+llama-ub2048	agents=8 steps=6	wall_s=57.9 steps_per_s=0.83	step_ms_p50=8944 p95=13445 max=13448	prompt_tok_mean=10541 cached_tok_mean=7637 hit_rate=0.72 errors=0 kv_max=- gpu_mib=17332 rss_mib=3394
+llama-ub2048-slots	server parallel=8	up_ms=2692 gpu_mib=17098 rss_mib=1966 
+llama-ub2048-slots	idle	cpu_pct=0.07
+llama-ub2048-slots	agents=8 steps=6	wall_s=33.7 steps_per_s=1.42	step_ms_p50=5575 p95=6354 max=6416	prompt_tok_mean=10540 cached_tok_mean=7666 hit_rate=0.73 errors=0 kv_max=- gpu_mib=17124 rss_mib=10767
+llama-ub2048-slots	server parallel=16	up_ms=2687 gpu_mib=21370 rss_mib=1981 
+llama-ub2048-slots	agents=16 steps=6	wall_s=64.1 steps_per_s=1.50	step_ms_p50=10615 p95=13741 max=16482	prompt_tok_mean=10571 cached_tok_mean=7683 hit_rate=0.73 errors=0 kv_max=- gpu_mib=21396 rss_mib=11287
+sglang	server	up_ms=138938 gpu_mib=23008 rss_mib=6112
+sglang	idle	cpu_pct=100.07
+sglang	agents=1 steps=6	wall_s=30.2 steps_per_s=0.20	step_ms_p50=4863 p95=5656 max=5656	prompt_tok_mean=10402 cached_tok_mean=7529 hit_rate=0.72 errors=0 kv_max=0.080000 gpu_mib=23030 rss_mib=6196
+sglang	agents=4 steps=6	wall_s=101.1 steps_per_s=0.24	step_ms_p50=16754 p95=17142 max=17144	prompt_tok_mean=10604 cached_tok_mean=7851 hit_rate=0.74 errors=0 kv_max=0.370000 gpu_mib=23052 rss_mib=6171
+sglang	agents=8 steps=6	wall_s=198.3 steps_per_s=0.24	step_ms_p50=32703 p95=33857 max=33859	prompt_tok_mean=10540 cached_tok_mean=7798 hit_rate=0.74 errors=0 kv_max=0.740000 gpu_mib=23076 rss_mib=6196
+llama-ub2048-slots-nocacheram	server parallel=8	up_ms=2754 gpu_mib=17098 rss_mib=1966 
+llama-ub2048-slots-nocacheram	idle	cpu_pct=0.03
+llama-ub2048-slots-nocacheram	agents=8 steps=6	wall_s=32.8 steps_per_s=1.46	step_ms_p50=5371 p95=6226 max=7387	prompt_tok_mean=10540 cached_tok_mean=7661 hit_rate=0.73 errors=0 kv_max=- gpu_mib=17124 rss_mib=2591

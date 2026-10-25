@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+# The demo's portal server is its own workspace; it is fixture, not product.
+exclude = ["demo/portals"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/panoptes-os/panoptes"
+
+[workspace.dependencies]
+panoptes-cgroup = { path = "crates/panoptes-cgroup" }
+libc = "0.2"
+rustix = { version = "1", features = ["fs", "event", "process"] }
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "sync", "time", "signal", "fs", "process"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.23"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
+rmcp = { version = "3.8", default-features = false, features = ["server", "macros", "transport-io", "transport-async-rw"] }
+panoptes-cdp = { path = "crates/panoptes-cdp" }
+reqwest = { version = "0.13", features = ["stream", "json"] }
+axum = "0.8"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
