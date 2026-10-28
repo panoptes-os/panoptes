@@ -13,7 +13,14 @@ use panoptes_cdp::cmd::AxNode;
 use std::collections::HashMap;
 use std::fmt::Write;
 
-const SKIP: &[&str] = &["none", "generic", "InlineTextBox", "LineBreak", "ignored", ""];
+const SKIP: &[&str] = &[
+    "none",
+    "generic",
+    "InlineTextBox",
+    "LineBreak",
+    "ignored",
+    "",
+];
 
 pub struct Rendered {
     pub text: String,
@@ -46,7 +53,7 @@ fn walk(
     max: usize,
     out: &mut Rendered,
 ) {
-    if out.truncated {
+    if out.truncated || off_left(n, boxes) {
         return;
     }
     let shown = !n.ignored
@@ -117,7 +124,11 @@ fn label_for(n: &AxNode, by_id: &HashMap<&str, &AxNode>) -> Option<String> {
     for _ in 0..6 {
         let parent = by_id.get(cur.parent.as_deref()?)?;
         let at = parent.children.iter().position(|c| *c == cur.id)?;
-        for sib in parent.children[..at].iter().rev().filter_map(|c| by_id.get(c.as_str())) {
+        for sib in parent.children[..at]
+            .iter()
+            .rev()
+            .filter_map(|c| by_id.get(c.as_str()))
+        {
             if let Some(l) = find_label(sib, by_id, 3) {
                 return Some(l);
             }
@@ -167,6 +178,16 @@ fn texts(n: &AxNode, by_id: &HashMap<&str, &AxNode>, out: &mut Vec<String>) {
     for c in n.children.iter().filter_map(|c| by_id.get(c.as_str())) {
         texts(c, by_id, out);
     }
+}
+
+/// A node drawn wholly left of the page, with everything under it. Sites
+/// hide widgets there instead of removing them: Frappe parks a datepicker
+/// per date field at x = -100000, and those calendars were over half of
+/// every ERPNext prompt. Nothing there can be seen or clicked.
+fn off_left(n: &AxNode, boxes: &HashMap<i64, [f64; 4]>) -> bool {
+    n.backend_id
+        .and_then(|b| boxes.get(&b))
+        .is_some_and(|b| b[0] + b[2] <= 0.0)
 }
 
 /// Static text whose parent already shows the same name adds nothing.
@@ -241,6 +262,26 @@ mod tests {
         // The second field must not borrow the first field's label.
         assert!(r.text.contains("[7] textbox\n"), "{}", r.text);
         assert!(r.text.contains("[8] textbox \"Named\"\n"), "{}", r.text);
+    }
+
+    #[test]
+    fn drops_subtrees_hidden_left_of_the_page() {
+        let nodes = vec![
+            node("1", None, &["2", "4"], "RootWebArea", "Form"),
+            node("2", Some("1"), &["3"], "table", "Calendar"),
+            node("3", Some("2"), &[], "button", "27"),
+            node("4", Some("1"), &[], "textbox", "Date"),
+        ];
+        // The calendar sits at x = -100000; its day has no box of its own.
+        let boxes = HashMap::from([
+            (2, [-100_000.0, 60.0, 250.0, 200.0]),
+            (4, [300.0, 60.0, 200.0, 30.0]),
+        ]);
+        let r = render(&nodes, &boxes, 10_000);
+        assert_eq!(
+            r.text,
+            "[1] RootWebArea \"Form\"\n  [4] textbox \"Date\" @(300,60 200x30)\n"
+        );
     }
 
     #[test]
