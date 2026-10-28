@@ -31,6 +31,7 @@ measure Panoptes itself; real models have run 10 invoices.
 
 ```text
 crates/
+├─ panoptes          host command line: check the host, start and stop fleets
 ├─ panoptes-cgroup   cgroup v2: freeze, reclaim, weights, PSI, clone3 spawn
 ├─ panoptes-cdp      Chrome DevTools Protocol client over a pipe
 ├─ panoptes-desk     per-agent tool server: screenshot, input, tree; MCP

@@ -1151,6 +1151,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7e036b411754132fd6b74e94b74e9a13c5cf606fa93d1885c35860d3060820b1"
 
 [[package]]
+name = "panoptes"
+version = "0.1.0"
+dependencies = [
+ "rustix 1.1.6",
+ "serde_json",
+]
+
+[[package]]
 name = "panoptes-cdp"
 version = "0.1.0"
 dependencies = [

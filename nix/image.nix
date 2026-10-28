@@ -1,8 +1,5 @@
-# Run with:
-#   podman run --privileged --cgroupns=private --network=host --shm-size=4g \
-#     --pids-limit=-1 panoptes:0.1.0
-# Each desk takes about 155 pids; Podman's default limit of 2048 stops
-# Chromium's threads at about 13 desks.
+# `panoptes up` runs this image with the flags the engine needs, and says
+# why each is there (crates/panoptes/src/fleet.rs).
 {
   dockerTools,
   writeShellApplication,

@@ -1,0 +1,15 @@
+[package]
+name = "panoptes"
+description = "Panoptes host command line: start, list, and stop fleets in containers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rustix.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

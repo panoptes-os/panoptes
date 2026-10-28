@@ -22,6 +22,6 @@ rustPlatform.buildRustPackage {
     description = "Run hundreds of graphical AI agents on one Linux box";
     license = lib.licenses.agpl3Plus;
     platforms = lib.platforms.linux;
-    mainProgram = "panoptes-resd";
+    mainProgram = "panoptes";
   };
 }

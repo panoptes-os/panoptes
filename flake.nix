@@ -45,6 +45,14 @@
           default = panoptes;
           # nix build .#image && docker load < result
           image = pkgs.callPackage ./nix/image.nix { inherit panoptes; };
+          # the host CLI alone, linked statically: a host needs only podman
+          # or docker besides it
+          cli = (pkgs.pkgsStatic.callPackage ./nix/package.nix { }).overrideAttrs {
+            cargoBuildFlags = [
+              "-p"
+              "panoptes"
+            ];
+          };
         }
       );
 
