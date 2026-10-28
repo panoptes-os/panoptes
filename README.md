@@ -1,4 +1,6 @@
-# Panoptes
+<p align="center">
+  <img src="docs/assets/wordmark.png" alt="Panoptes" width="560">
+</p>
 
 Run hundreds of graphical AI agents on one Linux box.
 
