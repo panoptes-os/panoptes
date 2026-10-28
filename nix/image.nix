@@ -80,5 +80,7 @@ dockerTools.buildLayeredImage {
       "PANOPTES_PDFTOTEXT=pdftotext"
       "SSL_CERT_FILE=${cacert}/etc/ssl/certs/ca-bundle.crt"
     ];
+    # links the GHCR package to the repository
+    Labels."org.opencontainers.image.source" = "https://github.com/panoptes-os/panoptes";
   };
 }
