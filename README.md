@@ -11,13 +11,20 @@ Panoptes compresses the desktop's memory into zswap with writeback off. A
 parked desktop holds about 40 MiB and takes about 100 ms to wake and take
 a screenshot.
 
+![panoptes top during the 700-agent run](docs/assets/top.gif)
+
+`panoptes top` replaying the 700-agent test run at 40 times speed. Blue
+boxes are parked desktops, orange ones are waiting for the model, and
+green ones are acting. The model in this run is scripted; see Status.
+
 `panoptes-desk` serves each agent's tools (screenshot, click, type, key,
 scroll, navigate, accessibility tree) over MCP. `panoptes-loop` drives
 many agents from one process with any OpenAI-compatible model API.
 
 Status: prototype. On one host with 32 threads and 125 GiB of RAM, 700
 agents entered 700 of 700 test invoices correctly, with 670 parked at the
-peak. [docs/one-pager.md](docs/one-pager.md) has the numbers, and
+peak. That run used a scripted model that answers from the test data, to
+measure Panoptes itself; real models have run 10 invoices so far. [docs/one-pager.md](docs/one-pager.md) has the numbers, and
 [docs/design/](docs/design/README.md) explains how each was measured.
 
 ## Layout
