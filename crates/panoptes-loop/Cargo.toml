@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 futures-util.workspace = true
 reqwest.workspace = true
+rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["process"] }

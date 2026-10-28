@@ -10,7 +10,8 @@
 //! ```
 //!
 //! A provider's key lives in `key_file`; the loop reads it once and never
-//! logs it.
+//! logs it. With `--tasks FILE` the jobs come from that file instead
+//! ([`TaskLine`]), and `tasks` may be left out.
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -20,7 +21,9 @@ use std::path::PathBuf;
 pub struct Config {
     pub provider: String,
     pub providers: BTreeMap<String, Provider>,
-    pub tasks: Tasks,
+    /// The invoice demo's jobs. A `--tasks` file replaces them.
+    #[serde(default)]
+    pub tasks: Option<Tasks>,
     pub desk: DeskLaunch,
     pub out_dir: PathBuf,
     #[serde(default = "default_run_name")]
@@ -33,6 +36,7 @@ pub struct Config {
     #[serde(default = "default_history_full")]
     pub history_full: usize,
     /// Most agents at once in a phase, by phase prefix: `{"erp": 50}`.
+    /// A task file runs without caps.
     #[serde(default = "default_phase_caps")]
     pub phase_caps: BTreeMap<String, usize>,
     /// Most agents with a thawed kiosk at once: starting, acting, or
@@ -120,6 +124,56 @@ pub struct Tasks {
     pub erp_password: String,
 }
 
+/// One line of a `--tasks` file, one agent's job:
+///
+/// ```json
+/// {"prompt": "What does A Light in the Attic cost?",
+///  "url": "https://books.toscrape.com/",
+///  "check": "case \"$PANOPTES_NOTE\" in *51.77*) ;; *) exit 1 ;; esac"}
+/// ```
+///
+/// `check` is run as `check::run` describes. An unknown field fails the
+/// whole file, so a misspelled field never runs as if it were absent.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskLine {
+    pub prompt: String,
+    /// The page the agent starts on.
+    pub url: String,
+    #[serde(default)]
+    pub check: Option<String>,
+}
+
+/// Parse a task file: one JSON object per line, blank lines skipped. Each
+/// task comes with its line number, counting from 1.
+pub fn parse_tasks(text: &str) -> Result<Vec<(usize, TaskLine)>, String> {
+    let mut out = Vec::new();
+    for (k, l) in text.lines().enumerate() {
+        let n = k + 1;
+        if l.trim().is_empty() {
+            continue;
+        }
+        let t: TaskLine = serde_json::from_str(l).map_err(|e| {
+            // serde counts lines within this one line; say the file's.
+            let msg = e.to_string();
+            let msg = msg.rsplit_once(" at line ").map_or(msg.as_str(), |m| m.0);
+            format!("line {n}, column {}: {msg}", e.column())
+        })?;
+        if t.prompt.trim().is_empty() {
+            return Err(format!("line {n}: empty prompt"));
+        }
+        reqwest::Url::parse(&t.url).map_err(|e| format!("line {n}: url {:?}: {e}", t.url))?;
+        if t.check.as_ref().is_some_and(|c| c.trim().is_empty()) {
+            return Err(format!("line {n}: empty check"));
+        }
+        out.push((n, t));
+    }
+    if out.is_empty() {
+        return Err("no tasks".into());
+    }
+    Ok(out)
+}
+
 #[derive(Debug, Deserialize)]
 pub struct DeskLaunch {
     /// Command that starts agent `{i}`'s desk with run directory `{run}`.
@@ -203,5 +257,39 @@ mod tests {
             expand(&cmd, 7, "/r/7"),
             vec!["--unit=pdesk-7", "exec x --run-dir /r/7"]
         );
+    }
+
+    #[test]
+    fn parses_task_lines_and_rejects_what_it_cannot_run() {
+        let ok = "{\"prompt\": \"p\", \"url\": \"https://a.example/\"}\n\n\
+{\"prompt\": \"q\", \"url\": \"data:text/html,x\", \"check\": \"true\"}\n";
+        let t = parse_tasks(ok).unwrap();
+        assert_eq!(t.iter().map(|(n, _)| *n).collect::<Vec<_>>(), [1, 3]);
+        assert_eq!(t[1].1.check.as_deref(), Some("true"));
+        assert!(t[0].1.check.is_none());
+
+        let err = |text: &str| parse_tasks(text).unwrap_err();
+        let line =
+            |rest: &str| format!("{{\"prompt\": \"p\", \"url\": \"https://a.example/\"{rest}}}");
+        let unknown = ": unknown field `chek`, expected one of `prompt`, `url`, `check`";
+        let e = err(&line(", \"chek\": \"true\""));
+        assert!(
+            e.starts_with("line 1, column ") && e.ends_with(unknown),
+            "{e}"
+        );
+        let e = err(&format!("\n{}", line(", \"timeout\": 5")));
+        assert!(
+            e.starts_with("line 2, column ") && e.contains("`timeout`"),
+            "{e}"
+        );
+        assert!(err("{\"prompt\": \"p\"}").ends_with(": missing field `url`"));
+        assert!(
+            err("{\"prompt\": \"p\", \"url\": \"books.toscrape.com\"}").contains("line 1: url")
+        );
+        assert!(
+            err("{\"prompt\": \" \", \"url\": \"https://a.example/\"}").contains("empty prompt")
+        );
+        assert!(err(&line(", \"check\": \"\"")).contains("empty check"));
+        assert_eq!(err("\n\n"), "no tasks");
     }
 }

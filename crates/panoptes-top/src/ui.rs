@@ -251,8 +251,8 @@ fn detail(f: &mut Frame, app: &mut App, r: Rect) {
     let mut lines = vec![
         title,
         Line::from(vec![
-            plain(" invoice "),
-            bold(a.invoice.clone().unwrap_or_else(|| "-".into()), CYAN),
+            plain(format!(" {} ", a.task.as_ref().map_or("task", |t| t.0))),
+            bold(a.task.as_ref().map_or("-".into(), |t| t.1.clone()), CYAN),
             plain(format!("   steps {}", a.steps)),
         ]),
     ];

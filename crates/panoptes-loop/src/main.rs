@@ -2,24 +2,40 @@
 //! panoptes-desk, all sharing one model client.
 //!
 //! ```text
-//! panoptes-loop CONFIG [--invoices inv-0001,inv-0002 | --first N]
+//! panoptes-loop CONFIG [--tasks FILE | --invoices inv-0001,...] [--first N]
 //! ```
 //!
-//! Each agent takes one invoice from the demo's ground truth, starts its
-//! desk, and runs the step loop in `agent`. The run writes, under
-//! `out_dir/run_name/`:
+//! Each agent takes one job, starts its desk, and runs the step loop in
+//! `agent`. The jobs are the lines of a `--tasks` file
+//! (`config::TaskLine`), or else invoices from the demo's ground truth. The
+//! run writes, under `out_dir/run_name/`:
 //!
 //! ```text
 //! trace.jsonl     one line per step: queue, ttft, decode, action, settle, observe
-//! results.jsonl   one line per agent as it finishes: done (claimed), verified, attached
-//! assigned.txt    the invoice ids, for verify.sh
+//! results.jsonl   one line per agent as it finishes: done (claimed), verified
+//! assigned.txt    one line per agent: invoice id (for verify.sh) or task line
 //! summary.json    medians and means over the steps, claimed done vs verified
 //! ```
 //!
-//! An agent's `done` is only its claim. After its run the loop checks the
-//! invoice over ERPNext's REST API (`erp`), and `verified` is that check.
+//! An agent's `done` is only its claim. After an invoice agent's run the
+//! loop checks the invoice over ERPNext's REST API (`erp`); after a task
+//! agent claims done the loop runs the line's `check` (`check`). `verified`
+//! is that check. A task agent's result line:
+//!
+//! ```json
+//! {"agent": 0, "line": 1, "status": "verified", "done": true, "steps": 6,
+//!  "cost_usd": 0.0041, "url": "https://books.toscrape.com/...", "note": "...",
+//!  "error": null, "verified": true, "check_exit": 0, "check_error": null,
+//!  "reloads": 0, "retypes": 0, "phase_wait_ms": 0.0, "acting_wait_ms": 3.1,
+//!  "desk_start_ms": 1183, "wall_ms": 21877}
+//! ```
+//!
+//! `status` is `verified` or `check_failed` when a check ran after the done
+//! claim, `claimed_done` when the line has no check, and `error` when the
+//! run ended without the claim, for the reason in `error`.
 
 mod agent;
+mod check;
 mod config;
 mod desk;
 mod erp;
@@ -27,21 +43,72 @@ mod model;
 
 use config::Config;
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+/// One agent's job: the task message its prompt carries, and where it came
+/// from.
 struct Task {
-    file: String,
     text: String,
-    truth: Value,
+    kind: Kind,
 }
 
-fn load_tasks(cfg: &Config, pick: &[String]) -> Result<Vec<Task>, String> {
-    let creds = std::fs::read_to_string(&cfg.tasks.creds)
-        .map_err(|e| format!("{}: {e}", cfg.tasks.creds.display()))?;
+enum Kind {
+    /// An invoice from the demo's ground truth, checked over ERPNext's API
+    /// after the run.
+    Invoice { file: String, truth: Value },
+    /// A line of a task file: the agent starts at `url`, and `check`
+    /// verifies its done claim.
+    Line {
+        line: usize,
+        url: String,
+        check: Option<String>,
+    },
+}
+
+impl Kind {
+    /// The field that ties the agent's trace and result lines to its job.
+    fn tag(&self) -> (&'static str, Value) {
+        match self {
+            Kind::Invoice { file, .. } => ("invoice", json!(file)),
+            Kind::Line { line, .. } => ("line", json!(line)),
+        }
+    }
+}
+
+/// A task agent's result in one word, from its result line. `verified` is
+/// there only when a check ran.
+fn status(r: &Value) -> &'static str {
+    match (r["done"] == true, r["verified"].as_bool()) {
+        (false, _) => "error",
+        (true, None) => "claimed_done",
+        (true, Some(true)) => "verified",
+        (true, Some(false)) => "check_failed",
+    }
+}
+
+fn load_task_file(path: &Path) -> Result<Vec<Task>, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let lines = config::parse_tasks(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(lines
+        .into_iter()
+        .map(|(line, t)| Task {
+            text: format!("{}\n\nStart page: {}", t.prompt, t.url),
+            kind: Kind::Line {
+                line,
+                url: t.url,
+                check: t.check,
+            },
+        })
+        .collect())
+}
+
+fn load_invoices(tasks: &config::Tasks, pick: &[String]) -> Result<Vec<Task>, String> {
+    let creds = std::fs::read_to_string(&tasks.creds)
+        .map_err(|e| format!("{}: {e}", tasks.creds.display()))?;
     // slug  url  user_field  user  password
     let creds: HashMap<&str, Vec<&str>> = creds
         .lines()
@@ -51,8 +118,8 @@ fn load_tasks(cfg: &Config, pick: &[String]) -> Result<Vec<Task>, String> {
             (f.len() >= 5).then(|| (f[0], f))
         })
         .collect();
-    let truth = std::fs::read_to_string(&cfg.tasks.truth)
-        .map_err(|e| format!("{}: {e}", cfg.tasks.truth.display()))?;
+    let truth = std::fs::read_to_string(&tasks.truth)
+        .map_err(|e| format!("{}: {e}", tasks.truth.display()))?;
     let mut by_file = HashMap::new();
     let mut order = Vec::new();
     for l in truth.lines().filter(|l| !l.trim().is_empty()) {
@@ -62,7 +129,7 @@ fn load_tasks(cfg: &Config, pick: &[String]) -> Result<Vec<Task>, String> {
         by_file.insert(file, v);
     }
     let files: Vec<String> = if pick.is_empty() {
-        cfg.tasks.invoices.clone()
+        tasks.invoices.clone()
     } else {
         pick.to_vec()
     };
@@ -82,20 +149,36 @@ fn load_tasks(cfg: &Config, pick: &[String]) -> Result<Vec<Task>, String> {
                 user = c[3],
                 pass = c[4],
             );
-            Ok(Task { file, text, truth: v.clone() })
+            Ok(Task {
+                text,
+                kind: Kind::Invoice {
+                    file,
+                    truth: v.clone(),
+                },
+            })
         })
         .collect()
 }
 
-fn args() -> Result<(String, Vec<String>, Option<usize>), String> {
+struct Args {
+    config: String,
+    /// The task file; without one the run takes invoices.
+    tasks: Option<PathBuf>,
+    invoices: Vec<String>,
+    first: Option<usize>,
+}
+
+fn args() -> Result<Args, String> {
     let mut it = std::env::args().skip(1);
-    let cfg = it
+    let config = it
         .next()
-        .ok_or("usage: panoptes-loop CONFIG [--invoices a,b | --first N]")?;
+        .ok_or("usage: panoptes-loop CONFIG [--tasks FILE | --invoices a,b] [--first N]")?;
+    let mut tasks = None;
     let mut pick = Vec::new();
     let mut first = None;
     while let Some(a) = it.next() {
         match a.as_str() {
+            "--tasks" => tasks = Some(PathBuf::from(it.next().ok_or("--tasks needs a file")?)),
             "--invoices" => {
                 pick = it
                     .next()
@@ -115,7 +198,15 @@ fn args() -> Result<(String, Vec<String>, Option<usize>), String> {
             other => return Err(format!("unknown argument {other}")),
         }
     }
-    Ok((cfg, pick, first))
+    if tasks.is_some() && !pick.is_empty() {
+        return Err("--tasks and --invoices do not mix".into());
+    }
+    Ok(Args {
+        config,
+        tasks,
+        invoices: pick,
+        first,
+    })
 }
 
 fn median(v: &mut [f64]) -> f64 {
@@ -175,13 +266,45 @@ async fn main() {
 }
 
 async fn real_main() -> Result<(), String> {
-    let (cfg_path, pick, first) = args()?;
+    let args = args()?;
+    let cfg_path = &args.config;
     let cfg: Config = serde_json::from_str(
-        &std::fs::read_to_string(&cfg_path).map_err(|e| format!("{cfg_path}: {e}"))?,
+        &std::fs::read_to_string(cfg_path).map_err(|e| format!("{cfg_path}: {e}"))?,
     )
     .map_err(|e| format!("{cfg_path}: {e}"))?;
-    let mut tasks = load_tasks(&cfg, &pick)?;
-    if let Some(n) = first {
+    // Where the jobs come from decides the prompt, the phase caps, and how
+    // a done claim is verified.
+    let (mut tasks, system, phases, erp) = match &args.tasks {
+        // The caps exist for ERPNext's few workers; with none, no agent is
+        // ever in a capped phase.
+        Some(file) => (
+            load_task_file(file)?,
+            agent::general_prompt(),
+            agent::Phases::new(&BTreeMap::new(), ""),
+            None,
+        ),
+        None => {
+            let t = cfg
+                .tasks
+                .as_ref()
+                .ok_or_else(|| format!("{cfg_path}: no tasks, and no --tasks FILE"))?;
+            let tasks = load_invoices(t, &args.invoices)?;
+            let erp = match erp::Erp::login(&t.erp_url, &t.erp_user, &t.erp_password).await {
+                Ok(e) => Some(Arc::new(e)),
+                Err(e) => {
+                    eprintln!("panoptes-loop: no verification: {e}");
+                    None
+                }
+            };
+            (
+                tasks,
+                agent::invoice_prompt(&t.erp_url, &t.erp_user, &t.erp_password),
+                agent::Phases::new(&cfg.phase_caps, &t.erp_url),
+                erp,
+            )
+        }
+    };
+    if let Some(n) = args.first {
         tasks.truncate(n);
     }
     let provider = cfg
@@ -191,19 +314,21 @@ async fn real_main() -> Result<(), String> {
     let model = Arc::new(model::Model::new(provider, cfg.budget.as_ref())?);
     let out = cfg.out_dir.join(&cfg.run_name);
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
-    let assigned: String = tasks.iter().map(|t| format!("{}\n", t.file)).collect();
+    let assigned: String = tasks
+        .iter()
+        .map(|t| match &t.kind {
+            Kind::Invoice { file, .. } => format!("{file}\n"),
+            Kind::Line { line, .. } => format!("{line}\n"),
+        })
+        .collect();
     std::fs::write(out.join("assigned.txt"), assigned).map_err(|e| e.to_string())?;
     let trace_file = Arc::new(Mutex::new(
         std::fs::File::create(out.join("trace.jsonl")).map_err(|e| e.to_string())?,
     ));
     let all_trace = Arc::new(Mutex::new(Vec::<Value>::new()));
-    let system = Arc::new(agent::system_prompt(
-        &cfg.tasks.erp_url,
-        &cfg.tasks.erp_user,
-        &cfg.tasks.erp_password,
-    ));
+    let system = Arc::new(system);
     let schema = Arc::new(agent::action_schema());
-    let phases = Arc::new(agent::Phases::new(&cfg.phase_caps, &cfg.tasks.erp_url));
+    let phases = Arc::new(phases);
     let acting = Arc::new(tokio::sync::Semaphore::new(cfg.acting_cap.max(1)));
     let results_file = Arc::new(Mutex::new(
         std::fs::File::create(out.join("results.jsonl")).map_err(|e| e.to_string())?,
@@ -212,19 +337,6 @@ async fn real_main() -> Result<(), String> {
     let mut ticks = tokio::time::interval(period);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let starts = Arc::new(tokio::sync::Mutex::new(ticks));
-    let erp = match erp::Erp::login(
-        &cfg.tasks.erp_url,
-        &cfg.tasks.erp_user,
-        &cfg.tasks.erp_password,
-    )
-    .await
-    {
-        Ok(e) => Some(Arc::new(e)),
-        Err(e) => {
-            eprintln!("panoptes-loop: no verification: {e}");
-            None
-        }
-    };
     let cfg = Arc::new(cfg);
     eprintln!(
         "panoptes-loop: {} agents, provider {}, acting cap {}, {} starts/s",
@@ -246,14 +358,22 @@ async fn real_main() -> Result<(), String> {
             .join(format!("agent-{i}"));
         handles.push(tokio::spawn(async move {
             starts.lock().await.tick().await;
-            let record = |r: Value| {
+            let (key, val) = task.kind.tag();
+            let from_file = matches!(task.kind, Kind::Line { .. });
+            let record = |mut r: Value| {
+                r[key] = val.clone();
+                if from_file {
+                    r["status"] = json!(status(&r));
+                }
                 if let Ok(mut f) = results_file.lock() {
                     let _ = writeln!(f, "{r}");
                 }
                 r
             };
             if cfg.stop_file.as_ref().is_some_and(|p| p.exists()) {
-                return record(json!({ "agent": i, "invoice": task.file, "done": false, "error": "not started: stop file" }));
+                return record(
+                    json!({ "agent": i, "done": false, "error": "not started: stop file" }),
+                );
             }
             let t0 = Instant::now();
             // A starting kiosk is thawed, so a start takes an acting slot.
@@ -263,17 +383,23 @@ async fn real_main() -> Result<(), String> {
             let mut desk = match desk {
                 Ok(d) => d,
                 Err(e) => {
-                    return record(json!({ "agent": i, "invoice": task.file, "done": false, "error": format!("desk: {e}") }));
+                    return record(
+                        json!({ "agent": i, "done": false, "error": format!("desk: {e}") }),
+                    );
                 }
             };
             let start_ms = t0.elapsed().as_millis();
-            let file = task.file.clone();
+            let start_url = match &task.kind {
+                Kind::Line { url, .. } => Some(url.as_str()),
+                Kind::Invoice { .. } => None,
+            };
             let outcome = agent::Run {
                 desk: &mut desk,
                 model: &model,
                 system: &system,
                 schema: &schema,
                 task: task.text,
+                start_url,
                 step_cap: cfg.step_cap,
                 ax_max_bytes: cfg.ax_max_bytes,
                 history_full: cfg.history_full,
@@ -282,7 +408,8 @@ async fn real_main() -> Result<(), String> {
                 cost_cap_usd: cfg.invoice_cost_cap_usd,
             }
             .go(|st| {
-                let line = st.to_json(i, &file);
+                let mut line = st.to_json(i);
+                line[key] = val.clone();
                 if let Ok(mut f) = trace_file.lock() {
                     let _ = writeln!(f, "{line}");
                 }
@@ -292,16 +419,25 @@ async fn real_main() -> Result<(), String> {
             })
             .await;
             desk.stop().await;
-            let mut r = json!({ "agent": i, "invoice": task.file, "done": outcome.done, "steps": outcome.steps,
-                    "error": outcome.error, "note": outcome.note, "reloads": outcome.reloads,
+            let mut r = json!({ "agent": i, "done": outcome.done, "steps": outcome.steps,
+                    "error": outcome.error, "note": outcome.note, "url": outcome.url,
+                    "reloads": outcome.reloads,
                     "retypes": outcome.retypes, "phase_wait_ms": outcome.phase_wait_ms,
                     "acting_wait_ms": outcome.acting_wait_ms,
                     "cost_usd": (outcome.cost_usd * 1e6).round() / 1e6,
                     "desk_start_ms": start_ms, "wall_ms": t0.elapsed().as_millis() });
-            if let Some(erp) = erp {
-                for (k, v) in erp.check(&task.truth).await.as_object().into_iter().flatten() {
-                    r[k] = v.clone();
+            let verdict = match &task.kind {
+                Kind::Invoice { truth, .. } => match &erp {
+                    Some(erp) => erp.check(truth).await,
+                    None => Value::Null,
+                },
+                Kind::Line { check: Some(c), .. } if outcome.done => {
+                    check::run(c, &run_dir, &outcome.url, &outcome.note, check::TIMEOUT).await
                 }
+                Kind::Line { .. } => Value::Null,
+            };
+            for (k, v) in verdict.as_object().into_iter().flatten() {
+                r[k] = v.clone();
             }
             record(r)
         }));
@@ -315,24 +451,34 @@ async fn real_main() -> Result<(), String> {
     let count = |f: &dyn Fn(&Value) -> bool| results.iter().filter(|r| f(r)).count();
     let steps: Vec<u64> = results.iter().filter_map(|r| r["steps"].as_u64()).collect();
     let sum = |k: &str| results.iter().filter_map(|r| r[k].as_u64()).sum::<u64>();
-    let mut failed: std::collections::BTreeMap<String, usize> = Default::default();
-    for f in results
-        .iter()
-        .filter_map(|r| r["failed"].as_array())
-        .flatten()
-        .filter_map(Value::as_str)
-    {
-        *failed.entry(f.to_owned()).or_default() += 1;
-    }
     let mut summary = summarize(&trace);
     summary["agents"] = json!(results.len());
     summary["claimed_done"] = json!(count(&|r| r["done"] == true));
     summary["verified"] = json!(count(&|r| r["verified"] == true));
-    summary["attached"] = json!(count(&|r| r["attached"] == true));
-    summary["verified_and_attached"] =
-        json!(count(&|r| r["verified"] == true && r["attached"] == true));
     summary["claimed_not_verified"] = json!(count(&|r| r["done"] == true && r["verified"] != true));
-    summary["failed_checks"] = json!(failed);
+    if args.tasks.is_some() {
+        let mut by_status: BTreeMap<&str, usize> = BTreeMap::new();
+        for r in &results {
+            *by_status
+                .entry(r["status"].as_str().unwrap_or("?"))
+                .or_default() += 1;
+        }
+        summary["status"] = json!(by_status);
+    } else {
+        let mut failed: BTreeMap<String, usize> = BTreeMap::new();
+        for f in results
+            .iter()
+            .filter_map(|r| r["failed"].as_array())
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            *failed.entry(f.to_owned()).or_default() += 1;
+        }
+        summary["attached"] = json!(count(&|r| r["attached"] == true));
+        summary["verified_and_attached"] =
+            json!(count(&|r| r["verified"] == true && r["attached"] == true));
+        summary["failed_checks"] = json!(failed);
+    }
     summary["reloads"] = json!(sum("reloads"));
     summary["retypes"] = json!(sum("retypes"));
     summary["wall_s"] = json!((wall * 10.0).round() / 10.0);

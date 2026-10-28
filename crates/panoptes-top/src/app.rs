@@ -55,13 +55,24 @@ pub struct Agent {
     pub zswap: Option<u64>,
     pub zswapped: Option<u64>,
     pub last_park: Option<Value>,
-    pub invoice: Option<String>,
+    /// The job a trace line names: `("invoice", file)` in the demo, or
+    /// `("line", n)` for a task file.
+    pub task: Option<(&'static str, String)>,
     pub steps: usize,
     /// The most recent trace lines, newest last.
     pub recent: VecDeque<Value>,
     pub thumb_b64: Option<String>,
     /// Seen by resd at some point.
     pub seen: bool,
+}
+
+/// The job a trace or result line names: an invoice in the demo, or a
+/// line of a task file.
+fn task_of(v: &Value) -> Option<(&'static str, String)> {
+    if let Some(file) = v["invoice"].as_str() {
+        return Some(("invoice", file.to_owned()));
+    }
+    v["line"].as_u64().map(|n| ("line", n.to_string()))
 }
 
 impl Agent {
@@ -74,7 +85,7 @@ impl Agent {
             zswap: None,
             zswapped: None,
             last_park: None,
-            invoice: None,
+            task: None,
             steps: 0,
             recent: VecDeque::new(),
             thumb_b64: None,
@@ -243,7 +254,7 @@ impl App {
             if a.kind == Kind::Queued {
                 a.kind = Kind::Starting;
             }
-            a.invoice = t["invoice"].as_str().map(str::to_owned);
+            a.task = task_of(t);
             let step = t["step"].as_u64().unwrap_or(0) as usize;
             a.steps = a.steps.max(step);
             a.recent.push_back(t.clone());
@@ -266,7 +277,11 @@ impl App {
                 };
                 // The loop's REST check when it ran; else the agent's claim.
                 let done = r["verified"].as_bool().unwrap_or(r["done"] == true);
-                let inv = r["invoice"].as_str().unwrap_or("?").to_owned();
+                let inv = match task_of(&r) {
+                    Some(("invoice", file)) => file,
+                    Some((tag, v)) => format!("{tag} {v}"),
+                    None => "?".to_owned(),
+                };
                 let a = self.slot(i);
                 if matches!(a.kind, Kind::Done | Kind::Failed) {
                     continue;

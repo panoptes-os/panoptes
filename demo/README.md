@@ -12,7 +12,8 @@ demo/
 │  ├─ verify.sh     scores ERPNext purchase invoices against truth.jsonl
 │  └─ smoke.sh      signs in to two portals, downloads PDFs, tests the challenge
 ├─ portals/         cargo workspace: axum server for the 20 supplier portals
-└─ data-snapshot/   truth, creds, PO map, masters, four sample PDFs
+├─ data-snapshot/   truth, creds, PO map, masters, four sample PDFs
+└─ web-tasks.jsonl  20 tasks on public sites for `panoptes-loop --tasks`; no ERPNext
 ```
 
 Regenerate, reseed, and run (on the server, in `/var/tmp/glarb-bench/demo`):

@@ -53,11 +53,9 @@ const RETYPES: usize = 2;
 
 /// The job, the tools, and the action format: the stable prefix every
 /// agent's prompt starts with. It holds no invoice's data.
-pub fn system_prompt(erp: &str, erp_user: &str, erp_password: &str) -> String {
+pub fn invoice_prompt(erp: &str, erp_user: &str, erp_password: &str) -> String {
     format!(
-        "You are an accounts-payable clerk operating one web browser. Each turn you see the \
-results of your last actions and the page's accessibility tree, one node per line:\n\
-[node_id] role \"name\" value=\"...\" @(x,y wxh)\n\n\
+        "You are an accounts-payable clerk operating one web browser. {SEES}\
 The job: enter one supplier invoice into ERPNext.\n\
 1. Sign in to the supplier's portal with the credentials in the task. Find the invoice \
 whose number the task gives in the portal's invoice list, open it, and download its PDF. \
@@ -83,8 +81,31 @@ system file chooser you cannot see); instead use upload with {{\"path\": <file>,
 \"selector\": \".modal.show input[type=file]\"}} and end the turn; once the file's name \
 shows in the dialog, click the dialog's Upload button. The file then shows as a link in \
 the sidebar. When the form shows Submitted and the PDF is listed there, reply with done \
-true and no actions.\n\n\
-Reply with one JSON object and nothing else:\n\
+true and no actions.\n\n{}",
+        format_and_tools()
+    )
+}
+
+/// The same prefix for a task file's agents: the task in the first message
+/// is the job, and the tools, rules, and action format are the invoice
+/// prompt's.
+pub fn general_prompt() -> String {
+    format!(
+        "You are operating one web browser for a user. {SEES}\
+The job is the task in the first message, which names the page you start on. When the \
+task asks for an answer, give it in the note of the reply that sets done.\n\n{}",
+        format_and_tools()
+    )
+}
+
+/// What a turn shows, said right after each prompt's first sentence.
+const SEES: &str = "Each turn you see the results of your last actions and the page's \
+accessibility tree, one node per line:\n[node_id] role \"name\" value=\"...\" @(x,y wxh)\n\n";
+
+/// The action format, the tools, and the rules, which end every prompt.
+fn format_and_tools() -> String {
+    format!(
+        "Reply with one JSON object and nothing else:\n\
 {{\"actions\": [{{\"tool\": \"click\", \"args\": {{\"node_id\": 42}}}}], \"done\": false, \"note\": \"...\"}}\n\n\
 Tools:\n\
 - navigate {{url}}: open a URL\n\
@@ -239,6 +260,8 @@ pub struct StepTrace {
     pub reply: String,
     pub results: Vec<String>,
     pub page: String,
+    /// The URL of the page it saw, which the model is not shown.
+    pub url: String,
     /// Error pages the loop reloaded and fields it retyped this step.
     pub reloads: u32,
     pub retypes: usize,
@@ -251,9 +274,9 @@ pub struct StepTrace {
 }
 
 impl StepTrace {
-    pub fn to_json(&self, agent: usize, invoice: &str) -> Value {
+    pub fn to_json(&self, agent: usize) -> Value {
         json!({
-            "agent": agent, "invoice": invoice, "step": self.step,
+            "agent": agent, "step": self.step,
             "queue_ms": self.queue_ms, "ttft_ms": self.ttft_ms, "decode_ms": self.decode_ms,
             "model_ms": self.model_ms, "action_ms": self.action_ms,
             "desk_ms": round2(self.desk_ms), "settle_ms": self.settle_ms,
@@ -265,7 +288,7 @@ impl StepTrace {
             "reasoning_tokens": self.reasoning_tokens, "cost_usd": self.cost_usd,
             "spent_usd": self.spent_usd, "reply": self.reply,
             "results": self.results.iter().map(|r| clip(r, 600)).collect::<Vec<_>>(),
-            "page": self.page,
+            "page": self.page, "url": self.url,
             "reloads": self.reloads, "retypes": self.retypes, "phase": self.phase,
             "phase_wait_ms": self.phase_wait_ms, "acting_wait_ms": self.acting_wait_ms,
             "error": self.error,
@@ -295,6 +318,8 @@ pub struct Outcome {
     pub steps: usize,
     pub error: Option<String>,
     pub note: String,
+    /// The URL of the page the model saw last.
+    pub url: String,
     pub reloads: u32,
     pub retypes: usize,
     pub phase_wait_ms: f64,
@@ -484,6 +509,9 @@ pub struct Run<'a> {
     pub system: &'a str,
     pub schema: &'a Value,
     pub task: String,
+    /// The page to open before the first observation; without one the
+    /// agent starts on whatever the desk shows.
+    pub start_url: Option<&'a str>,
     pub step_cap: usize,
     pub ax_max_bytes: usize,
     pub history_full: usize,
@@ -504,28 +532,27 @@ impl Run<'_> {
             steps: 0,
             error: None,
             note: String::new(),
+            url: String::new(),
             reloads: 0,
             retypes: 0,
             phase_wait_ms: 0.0,
             acting_wait_ms: 0.0,
             cost_usd: 0.0,
         };
+        let mut st = StepTrace::default();
         let permit = self.acting.acquire().await;
-        let obs = self.observe(&[]).await;
+        let obs = self.start(&mut st).await;
         drop(permit);
         let obs = match obs {
-            Ok((o, _)) => o,
+            Ok(o) => o,
             Err(e) => {
                 out.error = Some(e);
                 return out;
             }
         };
-        trace(StepTrace {
-            step: 0,
-            observe_ms: ms(first),
-            step_ms: ms(first),
-            ..StepTrace::default()
-        });
+        st.step_ms = ms(first);
+        out.url.clone_from(&st.url);
+        trace(st);
         turns.push((String::new(), obs));
         let mut phase: Option<String> = None;
         let mut slot: Option<OwnedSemaphorePermit> = None;
@@ -545,6 +572,10 @@ impl Run<'_> {
             out.cost_usd += st.cost_usd.unwrap_or(0.0);
             if let Some(n) = r.note {
                 out.note = n;
+            }
+            // A step that ends before it observes leaves the last page.
+            if !st.url.is_empty() {
+                out.url.clone_from(&st.url);
             }
             trace(st);
             match r.end {
@@ -567,6 +598,32 @@ impl Run<'_> {
         }
         out.error = Some("step cap reached".into());
         out
+    }
+
+    /// Step 0: open the start page, if there is one, and read the page. The
+    /// navigate's result line is shown with the page, as any action's is.
+    async fn start(&mut self, st: &mut StepTrace) -> Result<String, String> {
+        let t = Instant::now();
+        let Some(url) = self.start_url else {
+            let obs = self.observe(&[], st).await?;
+            st.observe_ms = ms(t);
+            return Ok(obs);
+        };
+        let a = Action {
+            tool: "navigate".into(),
+            args: json!({ "url": url }),
+        };
+        let r = self.desk.call(&a.tool, &a.args).await?;
+        st.actions = 1;
+        st.action_ms = ms(t);
+        st.desk_ms = r.total_ms;
+        let results = vec![result_line(&a, &r)];
+        st.results.clone_from(&results);
+        let to = Instant::now();
+        let (obs, settle_ms) = self.observe_after(true, &results, st).await?;
+        st.settle_ms = settle_ms;
+        st.observe_ms = round2(ms(to) - settle_ms);
+        Ok(obs)
     }
 
     async fn step(
@@ -737,7 +794,7 @@ Check this page; if the task is complete, reply with no actions and done true."
                 .await?;
         }
         let mut settle = ms(t);
-        let (mut obs, _) = self.observe(results).await?;
+        let mut obs = self.observe(results, st).await?;
         let mut notes = results.to_vec();
         while let Some(why) = obs
             .split_once("Page:\n")
@@ -761,13 +818,13 @@ Check this page; if the task is complete, reply with no actions and done true."
                 "- the loop reloaded an error page ({why}), attempt {}",
                 st.reloads
             ));
-            obs = self.observe(&notes).await?.0;
+            obs = self.observe(&notes, st).await?;
         }
         Ok((obs, round2(settle)))
     }
 
-    async fn observe(&mut self, results: &[String]) -> Result<(String, f64), String> {
-        let t = Instant::now();
+    /// Read the page into an observation, and its URL into `st`.
+    async fn observe(&mut self, results: &[String], st: &mut StepTrace) -> Result<String, String> {
         let r = self
             .desk
             .call("ax_tree", &json!({ "max_bytes": self.ax_max_bytes }))
@@ -775,6 +832,10 @@ Check this page; if the task is complete, reply with no actions and done true."
         if !r.ok {
             return Err(format!("ax_tree: {}", r.error.unwrap_or_default()));
         }
+        r.result["url"]
+            .as_str()
+            .unwrap_or("")
+            .clone_into(&mut st.url);
         let tree = r.result["tree"].as_str().unwrap_or("");
         let mut obs = String::new();
         if !results.is_empty() {
@@ -787,7 +848,7 @@ Check this page; if the task is complete, reply with no actions and done true."
         }
         obs.push_str("Page:\n");
         obs.push_str(tree);
-        Ok((obs, ms(t)))
+        Ok(obs)
     }
 }
 

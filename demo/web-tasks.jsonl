@@ -1,0 +1,20 @@
+{"prompt": "What does the book \"A Light in the Attic\" cost?", "url": "https://books.toscrape.com/", "check": "case \"$PANOPTES_NOTE\" in *51.77*) ;; *) exit 1 ;; esac"}
+{"prompt": "How many books does the Poetry category list?", "url": "https://books.toscrape.com/", "check": "case \" $PANOPTES_NOTE \" in *[!0-9]19[!0-9]*) ;; *) exit 1 ;; esac"}
+{"prompt": "Open the product page of \"Sapiens: A Brief History of Humankind\".", "url": "https://books.toscrape.com/", "check": "case \"$PANOPTES_URL\" in */catalogue/sapiens-a-brief-history-of-humankind_996/index.html) ;; *) exit 1 ;; esac"}
+{"prompt": "How many copies of \"Tipping the Velvet\" are in stock?", "url": "https://books.toscrape.com/", "check": "case \" $PANOPTES_NOTE \" in *[!0-9]20[!0-9]*) ;; *) exit 1 ;; esac"}
+{"prompt": "Who said the quote that begins \"The world as we have created it\"?", "url": "https://quotes.toscrape.com/", "check": "case \"$PANOPTES_NOTE\" in *Einstein*) ;; *) exit 1 ;; esac"}
+{"prompt": "When was Jane Austen born, according to her author page on this site?", "url": "https://quotes.toscrape.com/", "check": "case \" $PANOPTES_NOTE \" in *[!0-9]1775[!0-9]*) ;; *) exit 1 ;; esac"}
+{"prompt": "Log in. The site accepts any username and password. Then report the text of the link that replaced Login.", "url": "https://quotes.toscrape.com/login", "check": "test \"$PANOPTES_URL\" = https://quotes.toscrape.com/ && case \"$PANOPTES_NOTE\" in *Logout*) ;; *) exit 1 ;; esac"}
+{"prompt": "Open the page of quotes tagged \"inspirational\".", "url": "https://quotes.toscrape.com/", "check": "case \"$PANOPTES_URL\" in */tag/inspirational/*) ;; *) exit 1 ;; esac"}
+{"prompt": "Log in as tomsmith with password SuperSecretPassword!", "url": "https://the-internet.herokuapp.com/login", "check": "case \"$PANOPTES_URL\" in */secure) ;; *) exit 1 ;; esac"}
+{"prompt": "Click Start, wait for the loading to finish, and report the text that appears.", "url": "https://the-internet.herokuapp.com/dynamic_loading/2", "check": "case \"$PANOPTES_NOTE\" in *'Hello World'*) ;; *) exit 1 ;; esac"}
+{"prompt": "In the table Example 1, what is Jason Doe's amount due?", "url": "https://the-internet.herokuapp.com/tables", "check": "case \" $PANOPTES_NOTE \" in *[!0-9]100[!0-9]*) ;; *) exit 1 ;; esac"}
+{"prompt": "Press the Tab key and report what the page says you entered.", "url": "https://the-internet.herokuapp.com/key_presses", "check": "case \"$PANOPTES_NOTE\" in *TAB*) ;; *) exit 1 ;; esac"}
+{"prompt": "Open the page for status code 404.", "url": "https://the-internet.herokuapp.com/status_codes", "check": "case \"$PANOPTES_URL\" in */status_codes/404) ;; *) exit 1 ;; esac"}
+{"prompt": "Select Option 2 in the dropdown.", "url": "https://the-internet.herokuapp.com/dropdown"}
+{"prompt": "Follow the redirect link and stop on the page it leads to.", "url": "https://the-internet.herokuapp.com/redirector", "check": "case \"$PANOPTES_URL\" in */status_codes) ;; *) exit 1 ;; esac"}
+{"prompt": "In what year was the Linux kernel first released?", "url": "https://en.wikipedia.org/wiki/Linux_kernel", "check": "case \" $PANOPTES_NOTE \" in *[!0-9]1991[!0-9]*) ;; *) exit 1 ;; esac"}
+{"prompt": "Use the search box to find the article on zswap, and open it.", "url": "https://en.wikipedia.org/wiki/Main_Page", "check": "case \"$PANOPTES_URL\" in */wiki/Zswap) ;; *) exit 1 ;; esac"}
+{"prompt": "Open the German Wikipedia's version of this article.", "url": "https://en.wikipedia.org/wiki/Chromium_(web_browser)", "check": "case \"$PANOPTES_URL\" in https://de.wikipedia.org/wiki/*) ;; *) exit 1 ;; esac"}
+{"prompt": "Find RFC 9110 and report its title.", "url": "https://www.rfc-editor.org/", "check": "case \"$PANOPTES_NOTE\" in *'HTTP Semantics'*) ;; *) exit 1 ;; esac"}
+{"prompt": "Download this RFC's PDF, read it, and report the surname of its first author.", "url": "https://www.rfc-editor.org/info/rfc9110", "check": "for f in downloads/*.pdf; do test -s \"$f\" || exit 1; done; case \"$PANOPTES_NOTE\" in *Fielding*) ;; *) exit 1 ;; esac"}

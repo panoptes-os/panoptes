@@ -127,7 +127,7 @@ pub fn tools() -> Vec<(&'static str, &'static str, Value)> {
         ),
         (
             "ax_tree",
-            "The page's accessibility tree as compact text: [node_id] role \"name\" value=... @(x,y wxh).",
+            "The page's accessibility tree as compact text: [node_id] role \"name\" value=... @(x,y wxh), and the page's URL.",
             json!({ "type": "object", "properties": {
                 "max_bytes": { "type": "integer", "default": 24000 } } }),
         ),
@@ -397,12 +397,17 @@ impl Desk {
             }
             "ax_tree" => {
                 let max = arg_u64(args, "max_bytes", 24_000) as usize;
-                let (nodes, boxes) = tokio::join!(page.ax_tree(), page.layout_boxes());
+                let (nodes, boxes, url) = tokio::join!(
+                    page.ax_tree(),
+                    page.layout_boxes(),
+                    page.evaluate("location.href")
+                );
                 let nodes = nodes.map_err(e)?;
                 let boxes = boxes.unwrap_or_default();
                 let r = axtext::render(&nodes, &boxes, max);
                 Ok(Output::json(
-                    json!({ "tree": r.text, "nodes": r.nodes, "truncated": r.truncated }),
+                    json!({ "tree": r.text, "nodes": r.nodes, "truncated": r.truncated,
+                            "url": url.unwrap_or_default() }),
                     start,
                 ))
             }
