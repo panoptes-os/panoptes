@@ -2,41 +2,42 @@
 
 Run hundreds of graphical AI agents on one Linux box.
 
-Each agent gets a real desktop: a browser, or a native or Wine app in its
-own Cage kiosk. Panoptes freezes an agent's desktop while it waits for its
-model and parks it in compressed memory when it goes idle, so a parked
-agent costs about 40 MiB and is back on screen in about 100 ms. Everything
-is stock Linux driven from userspace: cgroup v2 freeze, `memory.reclaim`,
-zswap with writeback off, and `cpu.weight`. No kernel patches.
+Each agent gets its own desktop: a Cage compositor running Chromium, or a
+native or Wine app. While an agent waits for its model, Panoptes freezes
+its desktop with cgroup v2. When the agent has been idle for a while,
+Panoptes compresses the desktop's memory into zswap with writeback off. A
+parked desktop holds about 40 MiB and takes about 100 ms to wake and take
+a screenshot.
 
-Any harness can drive an agent over MCP; Panoptes also ships its own Rust
-agent loop for fleets. MCP is the wire, Panoptes is the body behind it.
+`panoptes-desk` serves each agent's tools (screenshot, click, type, key,
+scroll, navigate, accessibility tree) over MCP. `panoptes-loop` drives
+many agents from one process with any OpenAI-compatible model API.
 
-Status: prototype. On one 32-thread, 125 GiB host, 700 agents entered 700
-of 700 invoices correctly, with 670 parked at the peak. See
-[docs/one-pager.md](docs/one-pager.md) for the numbers and
-[docs/design/](docs/design/README.md) for how each was measured.
+Status: prototype. On one host with 32 threads and 125 GiB of RAM, 700
+agents entered 700 of 700 test invoices correctly, with 670 parked at the
+peak. [docs/one-pager.md](docs/one-pager.md) has the numbers, and
+[docs/design/](docs/design/README.md) explains how each was measured.
 
 ## Layout
 
 ```text
 crates/
 ├─ panoptes-cgroup   cgroup v2: freeze, reclaim, weights, PSI, clone3 spawn
-├─ panoptes-cdp      thin Chrome DevTools Protocol client over a pipe
-├─ panoptes-desk     per-agent control server: screenshot, input, tree; MCP
-├─ panoptes-resd     residency manager: freezes, parks, and evicts kiosks
+├─ panoptes-cdp      Chrome DevTools Protocol client over a pipe
+├─ panoptes-desk     per-agent tool server: screenshot, input, tree; MCP
+├─ panoptes-resd     freezes, parks, and evicts agents' desktops
 ├─ panoptes-loop     agent loop with an OpenAI-compatible model client
-├─ panoptes-oracle   scripted fake model for harness tests
-├─ panoptes-top      terminal dashboard of every agent
+├─ panoptes-oracle   scripted model for scale tests
+├─ panoptes-top      terminal view of every agent
 └─ panoptesctl       command line
 demo/                invoice-entry demo: generator, supplier portals, ERPNext
-bench/               the E1 to E14 benchmark scripts and raw results
-docs/                design record and decisions
+bench/               benchmark scripts E1 to E14 and their raw results
+docs/                design notes and decisions
 ```
 
 ## Build
 
-Linux only, cgroup v2, kernel 6.8 or later.
+Needs Linux with cgroup v2 and kernel 6.8 or later.
 
 ```sh
 nix develop
@@ -44,9 +45,9 @@ cargo build --release --workspace
 cargo test --workspace
 ```
 
-Parking needs zswap (zsmalloc, zstd) and swap sized for the parked agents;
-[docs/design/decisions.md](docs/design/decisions.md) lists the host
-requirements.
+Parking needs zswap (zsmalloc and zstd) and swap large enough for the
+parked desktops. [docs/design/decisions.md](docs/design/decisions.md)
+lists the host settings.
 
 ## License
 
