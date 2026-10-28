@@ -109,6 +109,8 @@ const PATIENCE: u32 = 20;
 const RELOADS: u32 = 3;
 /// Pre-submit fixes before the oracle gives up on the draft.
 const FIXES: u32 = 3;
+/// ERPNext's confirm text when saving a draft opened on an earlier day.
+const POSTING_DATE_MOVES: &str = "Posting Date will change to today's date";
 
 fn to(phase: &str, actions: Vec<Value>) -> Reply {
     Reply {
@@ -570,6 +572,15 @@ fn phase(t: &Truth, phase: &str, n: u32, results: &str, nodes: &[Node]) -> Reply
                     },
                 }
             }
+            // Past midnight in the site's timezone, ERPNext asks before it
+            // moves an unsaved draft's posting date to today. Escape answers
+            // No, so the save would never go through.
+            _ if nodes.iter().any(|x| x.name.starts_with(POSTING_DATE_MOVES)) => {
+                match in_dialog(nodes, "button", "Yes") {
+                    Some(b) => stay(phase, n, vec![click(b)]),
+                    None => stay(phase, n, vec![wait()]),
+                }
+            }
             // A save that failed (validation, a lock wait) leaves a dialog
             // up and the form unsaved: close it and save again.
             _ if n % 3 == 2 => stay(phase, n, vec![key("Escape"), key("Control+s")]),
@@ -731,6 +742,18 @@ mod tests {
         assert_eq!(
             next(&truth(), &st("erp_fill", 2), "", &right).phase,
             "erp_saved"
+        );
+    }
+
+    #[test]
+    fn confirms_the_posting_date_move_after_midnight() {
+        let tree = parse(
+            "[1] RootWebArea \"New Purchase Invoice - new-x\"\n  [2] dialog focusable focused modal\n    [3] heading \"Confirm\"\n    [4] paragraph\n      [5] StaticText \"Posting Date will change to today's date as Edit Posting Date and Time is unchecked. Are you sure want to proceed?\"\n    [6] button \"No\" focusable\n    [7] button \"Yes\" focusable",
+        );
+        let r = next(&truth(), &st("erp_saved", 2), "", &tree);
+        assert_eq!(
+            (r.phase.as_str(), r.actions[0]["args"]["node_id"].as_i64()),
+            ("erp_saved", Some(7))
         );
     }
 
