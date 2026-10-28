@@ -24,7 +24,8 @@ many agents from one process with any OpenAI-compatible model API.
 Status: prototype. On one host with 32 threads and 125 GiB of RAM, 700
 agents entered 700 of 700 test invoices correctly, with 670 parked at the
 peak. That run used a scripted model that answers from the test data, to
-measure Panoptes itself; real models have run 10 invoices so far. [docs/one-pager.md](docs/one-pager.md) has the numbers, and
+measure Panoptes itself; real models have run 10 invoices so far.
+[docs/one-pager.md](docs/one-pager.md) has the numbers, and
 [docs/design/](docs/design/README.md) explains how each was measured.
 
 ## Layout
