@@ -76,6 +76,7 @@ jq -c . "$D/orders.jsonl" | while read -r o; do
   grep -qxF "$(jq -r .key <<< "$o")" "$J.keys" || printf '%s\n' "$o"
 done > "$J.todo"
 echo "orders: $(wc -l < "$J.todo") to insert"
+# shellcheck disable=SC2016 # $1 expands in the child bash
 tr '\n' '\0' < "$J.todo" | xargs -0 -r -P "${SEED_JOBS:-1}" -I{} bash -c 'one "$1"' _ {} > "$J.new"
 sort "$J.have" "$J.new" > "$D/po_map.tsv"
 echo "orders: $(wc -l < "$J.new") inserted, $(wc -l < "$D/po_map.tsv") mapped"

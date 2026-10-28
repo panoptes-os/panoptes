@@ -35,7 +35,7 @@ echo "wrong answer: $(curl -s -b "$T/cobaltline.jar" -o /dev/null -w '%{redirect
 curl -fsS "$P/admin/captcha?portal=cobaltline&on=0"
 curl -fsS "$P/admin/captcha?portal=cobaltline&on=1" > /dev/null
 signin cobaltline > /dev/null
-code=$(curl -fsS -b "$T/cobaltline.jar" "$P/cobaltline/challenge" | grep -o '>[A-Z0-9]</text>' | tr -d '<>/text' | tr -d '\n')
+code=$(curl -fsS -b "$T/cobaltline.jar" "$P/cobaltline/challenge" | grep -o '>[A-Z0-9]</text>' | cut -c2 | tr -d '\n')
 echo "right answer ($code): $(curl -s -b "$T/cobaltline.jar" -o /dev/null -w '%{redirect_url}' -X POST "$P/cobaltline/challenge" -d "answer=$code")"
 echo "invoices after solving: $(curl -s -b "$T/cobaltline.jar" -o /dev/null -w '%{http_code}' "$P/cobaltline/invoices")"
 curl -fsS "$P/admin/captcha?portal=cobaltline&on=0"

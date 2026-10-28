@@ -1,0 +1,86 @@
+name: checks
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-flake:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+      - name: nix formatting
+        run: nix fmt -- --check flake.nix nix/*.nix
+      # builds the workspace with Nix, as the image does
+      - name: nix flake check
+        run: nix flake check --print-build-logs
+
+  check-rust:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+      - name: cargo fmt
+        run: nix develop --command cargo fmt --all --check
+      - name: cargo clippy
+        run: nix develop --command cargo clippy --workspace --all-targets --locked -- -D warnings
+      # tests that need root and a cgroup v2 mount are #[ignore]d; the bench
+      # reruns on a real host cover them
+      - name: cargo test
+        run: nix develop --command cargo test --workspace --locked
+      - name: demo portals
+        working-directory: demo/portals
+        run: |
+          nix develop ../.. --command cargo fmt --all --check
+          nix develop ../.. --command cargo clippy --locked -- -D warnings
+
+  check-shell:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+      # the bench scripts are kept as they ran and are not checked
+      - name: shellcheck
+        run: nix develop --command shellcheck -s bash nix/entry.sh demo/gen/*.sh
+
+  build-image:
+    runs-on: ubuntu-24.04
+    if: github.event.pull_request.draft != true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+      - name: nix build image
+        run: nix build --print-build-logs .#image
+
+  block-autosquash-commits:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: block autosquash commits
+        run: |
+          if git log --format=%s origin/main..HEAD \
+              | grep -qE '^(fixup!|squash!)'; then
+            echo "::error::Found fixup!/squash! commits. Please rebase."
+            exit 1
+          fi

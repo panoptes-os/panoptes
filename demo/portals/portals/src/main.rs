@@ -161,6 +161,8 @@ fn session(app: &App, headers: &HeaderMap, slug: &str) -> Option<(String, bool)>
 }
 
 /// Gate for pages behind login and, when switched on, the demo challenge.
+// The error is the redirect handlers return as-is; boxing it buys nothing.
+#[allow(clippy::result_large_err)]
 fn gate(app: &App, headers: &HeaderMap, slug: &str) -> Result<(), Response> {
     match session(app, headers, slug) {
         None => Err(Redirect::to(&format!("/{slug}/login")).into_response()),
@@ -178,7 +180,12 @@ async fn index(State(app): St) -> Html<String> {
     );
     for slug in &app.order {
         let sp = &app.suppliers[slug];
-        let _ = write!(b, r#"<li><a href="/{s}/login">{n}</a></li>"#, s = sp.slug, n = esc(&sp.name));
+        let _ = write!(
+            b,
+            r#"<li><a href="/{s}/login">{n}</a></li>"#,
+            s = sp.slug,
+            n = esc(&sp.name)
+        );
     }
     b.push_str("</ul>");
     Html(b)
@@ -189,7 +196,9 @@ async fn root(Path(slug): Path<String>) -> Redirect {
 }
 
 async fn login_form(State(app): St, Path(slug): Path<String>) -> Response {
-    let Some(sp) = app.suppliers.get(&slug) else { return not_found() };
+    let Some(sp) = app.suppliers.get(&slug) else {
+        return not_found();
+    };
     let (label, kind) = match sp.portal.user_field.as_str() {
         "email" => ("Email or user ID", "text"),
         "account" => ("Account number", "text"),
@@ -212,8 +221,13 @@ async fn login(
     Path(slug): Path<String>,
     Form(form): Form<HashMap<String, String>>,
 ) -> Response {
-    let Some(sp) = app.suppliers.get(&slug) else { return not_found() };
-    let user = form.get(&sp.portal.user_field).map(String::as_str).unwrap_or("");
+    let Some(sp) = app.suppliers.get(&slug) else {
+        return not_found();
+    };
+    let user = form
+        .get(&sp.portal.user_field)
+        .map(String::as_str)
+        .unwrap_or("");
     let pass = form.get("password").map(String::as_str).unwrap_or("");
     if user != sp.login.user || pass != sp.login.password {
         let body = format!(
@@ -225,11 +239,22 @@ async fn login(
     let sid = random_hex(16);
     app.sessions.lock().unwrap().insert(
         sid.clone(),
-        Session { slug: slug.clone(), passed: false, code: String::new() },
+        Session {
+            slug: slug.clone(),
+            passed: false,
+            code: String::new(),
+        },
     );
-    let next = if app.captcha.lock().unwrap().contains(&slug) { "challenge" } else { "invoices" };
+    let next = if app.captcha.lock().unwrap().contains(&slug) {
+        "challenge"
+    } else {
+        "invoices"
+    };
     (
-        [(header::SET_COOKIE, format!("psid_{slug}={sid}; Path=/{slug}; HttpOnly; SameSite=Lax"))],
+        [(
+            header::SET_COOKIE,
+            format!("psid_{slug}={sid}; Path=/{slug}; HttpOnly; SameSite=Lax"),
+        )],
         Redirect::to(&format!("/{slug}/{next}")),
     )
         .into_response()
@@ -275,7 +300,9 @@ fn challenge_svg(code: &str, seed: &str) -> String {
 }
 
 async fn challenge_form(State(app): St, Path(slug): Path<String>, headers: HeaderMap) -> Response {
-    let Some(sp) = app.suppliers.get(&slug) else { return not_found() };
+    let Some(sp) = app.suppliers.get(&slug) else {
+        return not_found();
+    };
     let Some((sid, _)) = session(&app, &headers, &slug) else {
         return Redirect::to(&format!("/{slug}/login")).into_response();
     };
@@ -285,7 +312,10 @@ async fn challenge_form(State(app): St, Path(slug): Path<String>, headers: Heade
         .as_bytes()
         .chunks(2)
         .take(5) // five characters fit the 260 px image
-        .map(|c| ALPHABET[u8::from_str_radix(std::str::from_utf8(c).unwrap(), 16).unwrap() as usize % ALPHABET.len()] as char)
+        .map(|c| {
+            ALPHABET[u8::from_str_radix(std::str::from_utf8(c).unwrap(), 16).unwrap() as usize
+                % ALPHABET.len()] as char
+        })
         .collect();
     if let Some(s) = app.sessions.lock().unwrap().get_mut(&sid) {
         s.code = code.clone();
@@ -310,12 +340,19 @@ async fn challenge(
     let Some((sid, _)) = session(&app, &headers, &slug) else {
         return Redirect::to(&format!("/{slug}/login")).into_response();
     };
-    let answer = form.get("answer").map(|a| a.trim().to_uppercase()).unwrap_or_default();
+    let answer = form
+        .get("answer")
+        .map(|a| a.trim().to_uppercase())
+        .unwrap_or_default();
     let mut s = app.sessions.lock().unwrap();
     let sess = s.get_mut(&sid).unwrap();
     let ok = !sess.code.is_empty() && answer == sess.code;
     sess.passed |= ok;
-    Redirect::to(&format!("/{slug}/{}", if ok { "invoices" } else { "challenge" })).into_response()
+    Redirect::to(&format!(
+        "/{slug}/{}",
+        if ok { "invoices" } else { "challenge" }
+    ))
+    .into_response()
 }
 
 #[derive(Deserialize, Default)]
@@ -334,22 +371,36 @@ async fn list(
     headers: HeaderMap,
     Query(q): Query<ListQuery>,
 ) -> Response {
-    let Some(sp) = app.suppliers.get(&slug) else { return not_found() };
+    let Some(sp) = app.suppliers.get(&slug) else {
+        return not_found();
+    };
     if let Err(r) = gate(&app, &headers, &slug) {
         return r;
     }
     let t = &sp.portal;
     let nonempty = |o: &Option<String>| o.as_deref().filter(|s| !s.is_empty()).map(str::to_string);
-    let (qs, from, to, status, month) =
-        (nonempty(&q.q), nonempty(&q.from), nonempty(&q.to), nonempty(&q.status), nonempty(&q.month));
+    let (qs, from, to, status, month) = (
+        nonempty(&q.q),
+        nonempty(&q.from),
+        nonempty(&q.to),
+        nonempty(&q.status),
+        nonempty(&q.month),
+    );
     let all = app.invoices.get(&slug).map(Vec::as_slice).unwrap_or(&[]);
     let rows: Vec<&Invoice> = all
         .iter()
-        .filter(|i| qs.as_deref().map_or(true, |s| i.invoice_no.to_lowercase().contains(&s.to_lowercase())))
-        .filter(|i| from.as_deref().map_or(true, |f| i.date.as_str() >= f))
-        .filter(|i| to.as_deref().map_or(true, |f| i.date.as_str() <= f))
-        .filter(|i| status.as_deref().map_or(true, |s| s == "all" || i.status.eq_ignore_ascii_case(s)))
-        .filter(|i| month.as_deref().map_or(true, |m| i.date.starts_with(m)))
+        .filter(|i| {
+            qs.as_deref()
+                .is_none_or(|s| i.invoice_no.to_lowercase().contains(&s.to_lowercase()))
+        })
+        .filter(|i| from.as_deref().is_none_or(|f| i.date.as_str() >= f))
+        .filter(|i| to.as_deref().is_none_or(|f| i.date.as_str() <= f))
+        .filter(|i| {
+            status
+                .as_deref()
+                .is_none_or(|s| s == "all" || i.status.eq_ignore_ascii_case(s))
+        })
+        .filter(|i| month.as_deref().is_none_or(|m| i.date.starts_with(m)))
         .collect();
     let per = t.page_size.max(1);
     let pages = rows.len().div_ceil(per).max(1);
@@ -360,11 +411,23 @@ async fn list(
     // Each portal filters differently.
     let keep = format!(
         "{}{}{}{}{}",
-        qs.as_deref().map(|v| format!("&q={}", esc(v))).unwrap_or_default(),
-        from.as_deref().map(|v| format!("&from={v}")).unwrap_or_default(),
-        to.as_deref().map(|v| format!("&to={v}")).unwrap_or_default(),
-        status.as_deref().map(|v| format!("&status={v}")).unwrap_or_default(),
-        month.as_deref().map(|v| format!("&month={v}")).unwrap_or_default(),
+        qs.as_deref()
+            .map(|v| format!("&q={}", esc(v)))
+            .unwrap_or_default(),
+        from.as_deref()
+            .map(|v| format!("&from={v}"))
+            .unwrap_or_default(),
+        to.as_deref()
+            .map(|v| format!("&to={v}"))
+            .unwrap_or_default(),
+        status
+            .as_deref()
+            .map(|v| format!("&status={v}"))
+            .unwrap_or_default(),
+        month
+            .as_deref()
+            .map(|v| format!("&month={v}"))
+            .unwrap_or_default(),
     );
     let _ = write!(b, r#"<form method="get" action="/{}/invoices">"#, sp.slug);
     match t.filter.as_str() {
@@ -387,7 +450,10 @@ async fn list(
         if t.list == "cards" {
             format!(r#"<a href="/{}/invoices/{}">View</a>"#, sp.slug, i.file)
         } else {
-            format!(r#"<a href="/{}/download/{}.pdf">Download PDF</a>"#, sp.slug, i.file)
+            format!(
+                r#"<a href="/{}/download/{}.pdf">Download PDF</a>"#,
+                sp.slug, i.file
+            )
         }
     };
     match t.list.as_str() {
@@ -396,7 +462,11 @@ async fn list(
                 let _ = write!(
                     b,
                     r#"<div class="card"><b>{}</b><br>{}<br>{}<br>Status: {}<br>{}</div>"#,
-                    esc(&i.invoice_no), esc(&i.display.date), esc(&i.display.total), i.status, dl(i)
+                    esc(&i.invoice_no),
+                    esc(&i.display.date),
+                    esc(&i.display.total),
+                    i.status,
+                    dl(i)
                 );
             }
         }
@@ -405,15 +475,20 @@ async fn list(
                 let _ = write!(
                     b,
                     r#"<div class="row">{} | issued {} | due {} | {} | {} | {}</div>"#,
-                    esc(&i.invoice_no), esc(&i.display.date), esc(&i.display.due),
-                    esc(&i.display.total), i.status, dl(i)
+                    esc(&i.invoice_no),
+                    esc(&i.display.date),
+                    esc(&i.display.due),
+                    esc(&i.display.total),
+                    i.status,
+                    dl(i)
                 );
             }
         }
         _ => {
             b.push_str("<table><tr><th>Number</th><th>Date</th><th>Due</th><th>Amount</th><th>Status</th><th></th></tr>");
             for i in shown {
-                let _ = write!(
+                let _ =
+                    write!(
                     b,
                     "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
                     esc(&i.invoice_no), esc(&i.display.date), esc(&i.display.due),
@@ -425,11 +500,23 @@ async fn list(
     }
     b.push_str("<p>");
     if pg > 1 {
-        let _ = write!(b, r#"<a href="/{}/invoices?page={}{}">Previous</a> "#, sp.slug, pg - 1, keep);
+        let _ = write!(
+            b,
+            r#"<a href="/{}/invoices?page={}{}">Previous</a> "#,
+            sp.slug,
+            pg - 1,
+            keep
+        );
     }
     let _ = write!(b, "Page {pg} of {pages}");
     if pg < pages {
-        let _ = write!(b, r#" <a href="/{}/invoices?page={}{}">Next</a>"#, sp.slug, pg + 1, keep);
+        let _ = write!(
+            b,
+            r#" <a href="/{}/invoices?page={}{}">Next</a>"#,
+            sp.slug,
+            pg + 1,
+            keep
+        );
     }
     b.push_str("</p>");
     page(sp, &t.list_label, &b).into_response()
@@ -439,38 +526,70 @@ fn find<'a>(app: &'a App, slug: &str, file: &str) -> Option<&'a Invoice> {
     app.invoices.get(slug)?.iter().find(|i| i.file == file)
 }
 
-async fn detail(State(app): St, Path((slug, file)): Path<(String, String)>, headers: HeaderMap) -> Response {
-    let Some(sp) = app.suppliers.get(&slug) else { return not_found() };
+async fn detail(
+    State(app): St,
+    Path((slug, file)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(sp) = app.suppliers.get(&slug) else {
+        return not_found();
+    };
     if let Err(r) = gate(&app, &headers, &slug) {
         return r;
     }
-    let Some(i) = find(&app, &slug, &file) else { return not_found() };
+    let Some(i) = find(&app, &slug, &file) else {
+        return not_found();
+    };
     let body = format!(
         r#"<table><tr><th>Number</th><td>{}</td></tr><tr><th>Issued</th><td>{}</td></tr><tr><th>Due</th><td>{}</td></tr>
 <tr><th>Amount</th><td>{}</td></tr><tr><th>Status</th><td>{}</td></tr></table>
 <p><a href="/{}/download/{}.pdf">Download PDF</a></p>"#,
-        esc(&i.invoice_no), esc(&i.display.date), esc(&i.display.due), esc(&i.display.total),
-        i.status, sp.slug, i.file
+        esc(&i.invoice_no),
+        esc(&i.display.date),
+        esc(&i.display.due),
+        esc(&i.display.total),
+        i.status,
+        sp.slug,
+        i.file
     );
     page(sp, &format!("Document {}", i.invoice_no), &body).into_response()
 }
 
-async fn download(State(app): St, Path((slug, file)): Path<(String, String)>, headers: HeaderMap) -> Response {
+async fn download(
+    State(app): St,
+    Path((slug, file)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
     if !app.suppliers.contains_key(&slug) {
         return not_found();
     }
     if let Err(r) = gate(&app, &headers, &slug) {
         return r;
     }
-    let Some(i) = file.strip_suffix(".pdf").and_then(|f| find(&app, &slug, f)) else { return not_found() };
+    let Some(i) = file.strip_suffix(".pdf").and_then(|f| find(&app, &slug, f)) else {
+        return not_found();
+    };
     let Ok(bytes) = tokio::fs::read(app.pdf_dir.join(format!("{}.pdf", i.file))).await else {
         return not_found();
     };
-    let name: String = i.invoice_no.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
+    let name: String = i
+        .invoice_no
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
     (
         [
             (header::CONTENT_TYPE, "application/pdf".to_string()),
-            (header::CONTENT_DISPOSITION, format!(r#"attachment; filename="{name}.pdf""#)),
+            (
+                header::CONTENT_DISPOSITION,
+                format!(r#"attachment; filename="{name}.pdf""#),
+            ),
         ],
         bytes,
     )
@@ -488,12 +607,19 @@ async fn admin_captcha(State(app): St, Query(q): Query<CaptchaQuery>) -> String 
     let mut c = app.captcha.lock().unwrap();
     if let (Some(p), Some(on)) = (q.portal, q.on) {
         if app.suppliers.contains_key(&p) {
-            if on == 1 { c.insert(p); } else { c.remove(&p); }
+            if on == 1 {
+                c.insert(p);
+            } else {
+                c.remove(&p);
+            }
         }
     }
     let mut v: Vec<&String> = c.iter().collect();
     v.sort();
-    format!("challenge on: {}\n", v.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(","))
+    format!(
+        "challenge on: {}\n",
+        v.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(",")
+    )
 }
 
 #[tokio::main]
@@ -512,7 +638,10 @@ async fn main() {
         serde_json::from_slice(&std::fs::read(dir.join("suppliers.json")).expect("suppliers.json"))
             .expect("parse suppliers.json");
     let mut invoices: HashMap<String, Vec<Invoice>> = HashMap::new();
-    for line in std::fs::read_to_string(dir.join("truth.jsonl")).expect("truth.jsonl").lines() {
+    for line in std::fs::read_to_string(dir.join("truth.jsonl"))
+        .expect("truth.jsonl")
+        .lines()
+    {
         if line.trim().is_empty() {
             continue;
         }
