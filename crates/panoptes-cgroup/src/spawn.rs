@@ -55,6 +55,13 @@ impl Child {
         Ok(())
     }
 
+    /// Let the process outlive this handle, as a launcher that exits right
+    /// away needs; it is reparented to the nearest subreaper or init.
+    pub fn detach(mut self) -> u32 {
+        self.reaped = true;
+        self.pid
+    }
+
     /// Wait for the process to exit and return its raw wait status.
     pub fn wait(mut self) -> Result<i32> {
         let status = self.reap()?;
@@ -129,8 +136,13 @@ pub(crate) fn spawn_into(
     let mut vars: Vec<CString> = std::env::vars_os()
         .filter(|(k, _)| !env.iter().any(|(ek, _)| ek == k))
         .map(|(k, v)| [k.as_bytes(), b"=", v.as_bytes()].concat())
-        .chain(env.iter().map(|(k, v)| [k.as_bytes(), b"=", v.as_bytes()].concat()))
-        .map(|kv| CString::new(kv).map_err(|_| Error::os("env", std::io::ErrorKind::InvalidInput.into())))
+        .chain(
+            env.iter()
+                .map(|(k, v)| [k.as_bytes(), b"=", v.as_bytes()].concat()),
+        )
+        .map(|kv| {
+            CString::new(kv).map_err(|_| Error::os("env", std::io::ErrorKind::InvalidInput.into()))
+        })
         .collect::<Result<_>>()?;
     vars.sort();
     let mut arg_ptrs: Vec<*const libc::c_char> = args.iter().map(|a| a.as_ptr()).collect();

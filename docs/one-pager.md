@@ -64,8 +64,8 @@ panoptes-loop (or any MCP client): click(...)
    └─ tell resd it is done; resd freezes it, and parks it if it stays idle
 ```
 
-The Docker image builds with Nix and runs desks without systemd inside;
-it is being tested now.
+The Docker image builds with Nix and runs desks without systemd inside.
+20 agents ran in it under Podman, 20 of 20 correct.
 
 ## Business model
 

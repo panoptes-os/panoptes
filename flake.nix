@@ -4,7 +4,7 @@
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
   outputs =
-    { nixpkgs, ... }:
+    { self, nixpkgs, ... }:
     let
       systems = [
         "x86_64-linux"
@@ -31,6 +31,25 @@
             pkgs.rustfmt
           ];
         };
+      });
+
+      # Linux only: the engine drives cgroup v2 and zswap.
+      packages = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          panoptes = pkgs.callPackage ./nix/package.nix { };
+        in
+        {
+          inherit panoptes;
+          default = panoptes;
+          # nix build .#image && docker load < result
+          image = pkgs.callPackage ./nix/image.nix { inherit panoptes; };
+        }
+      );
+
+      checks = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system: {
+        inherit (self.packages.${system}) panoptes;
       });
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt);
