@@ -105,6 +105,13 @@ fn header(f: &mut Frame, app: &App, r: Rect) {
     }
     let queue = app.count(Kind::Queued);
     counts.push(bold(format!("queue {queue}"), WHITE));
+    // Agents whose model call waits out a 429 cooldown; resd shows them
+    // frozen or parked like any other waiting agent.
+    let limited = fr.rate_waiting;
+    counts.push(bold(
+        format!("   rate-limited {limited}"),
+        if limited > 0 { AMBER } else { WHITE },
+    ));
     if app.others > 0 {
         counts.push(plain(format!("   +{} other resd agents", app.others)));
     }

@@ -1,7 +1,7 @@
 //! panoptes top: the fleet on one screen.
 //!
 //! ```text
-//! header   counts by state, steps/s, RAM, zswap, CPU, GPU, queue
+//! header   counts by state, queue, rate-limited, steps/s, RAM, zswap, CPU, GPU
 //! grid     one cell per agent, colored by state      | detail of the selected
 //! ticker   park / wake / freeze / done events        | agent + its capture
 //! ```
@@ -19,7 +19,7 @@ const USAGE: &str = "usage: panoptes-top [--resd SOCK] [--run DIR] [--record FIL
 
   --resd SOCK         panoptes-resd socket (default /run/panoptes/resd.sock)
   --run DIR           the loop's run directory: trace.jsonl, results.jsonl,
-                      assigned.txt, agent-N/thumb.b64
+                      assigned.txt, model.json, agent-N/thumb.b64
   --record FILE       also append every frame to FILE for --demo-replay
   --demo-replay FILE  play a recording instead of reading the host; loops
   --speed X           replay speed (default 1)

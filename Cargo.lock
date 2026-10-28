@@ -1184,6 +1184,7 @@ dependencies = [
 name = "panoptes-loop"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "futures-util",
  "reqwest",
  "rustix 1.1.6",

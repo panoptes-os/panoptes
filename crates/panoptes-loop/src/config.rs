@@ -82,8 +82,19 @@ pub struct Provider {
     pub max_concurrency: usize,
     #[serde(default = "default_timeout")]
     pub timeout_s: u64,
+    /// Attempts for a 5xx, a transport error, or an empty reply.
     #[serde(default = "default_retries")]
     pub retries: u32,
+    /// How long a model call keeps retrying 429s, from the first time a
+    /// rate limit holds it.
+    #[serde(default = "default_rate_limit_wait")]
+    pub rate_limit_wait_s: u64,
+    /// Backoff ceilings: the first wait is uniform in `[0, backoff_ms]`, and
+    /// the ceiling doubles per retry up to `backoff_max_ms`.
+    #[serde(default = "default_backoff")]
+    pub backoff_ms: u64,
+    #[serde(default = "default_backoff_max")]
+    pub backoff_max_ms: u64,
     /// Send the action schema as `response_format: json_schema`.
     #[serde(default)]
     pub json_schema: bool,
@@ -215,6 +226,15 @@ fn default_timeout() -> u64 {
 }
 fn default_retries() -> u32 {
     3
+}
+fn default_rate_limit_wait() -> u64 {
+    600
+}
+fn default_backoff() -> u64 {
+    500
+}
+fn default_backoff_max() -> u64 {
+    60_000
 }
 fn default_auth() -> String {
     "bearer".into()

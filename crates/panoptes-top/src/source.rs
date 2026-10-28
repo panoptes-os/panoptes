@@ -2,6 +2,7 @@
 //!
 //! ```text
 //! live:    resd status (socket) + /proc + nvidia-smi + the loop's run dir
+//!          (trace.jsonl, results.jsonl, assigned.txt, model.json, thumbs)
 //! record:  live, and every frame appended to a JSONL file
 //! replay:  frames read back from that file at their recorded pace
 //! ```
@@ -32,6 +33,9 @@ pub struct Frame {
     pub results: Option<Vec<Value>>,
     /// Invoices assigned to the run.
     pub assigned: usize,
+    /// The loop's model calls waiting out a rate-limit cooldown, from its
+    /// model.json.
+    pub rate_waiting: usize,
     /// Changed thumbnails: (agent index, base64 JPEG).
     pub thumbs: Vec<(usize, String)>,
 }
@@ -43,6 +47,7 @@ impl Frame {
             "mem_available": self.mem_available, "cpu": self.cpu,
             "gpu": self.gpu.map(|(u, m)| json!([u, m])), "trace": self.trace,
             "results": self.results, "assigned": self.assigned,
+            "rate_waiting": self.rate_waiting,
             "thumbs": self.thumbs.iter().map(|(i, b)| json!([i, b])).collect::<Vec<_>>(),
         })
     }
@@ -60,6 +65,7 @@ impl Frame {
             trace: v["trace"].as_array().cloned().unwrap_or_default(),
             results: v["results"].as_array().cloned(),
             assigned: v["assigned"].as_u64().unwrap_or(0) as usize,
+            rate_waiting: v["rate_waiting"].as_u64().unwrap_or(0) as usize,
             thumbs: v["thumbs"]
                 .as_array()
                 .map(|a| {
@@ -142,6 +148,11 @@ impl Live {
             f.assigned = std::fs::read_to_string(run.join("assigned.txt"))
                 .map(|s| s.lines().filter(|l| !l.is_empty()).count())
                 .unwrap_or(0);
+            f.rate_waiting = std::fs::read_to_string(run.join("model.json"))
+                .ok()
+                .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+                .and_then(|v| v["rate_waiting"].as_u64())
+                .unwrap_or(0) as usize;
             let n = agents.max(f.assigned);
             self.thumb_seen.resize(n, None);
             for i in 0..n {
@@ -341,5 +352,21 @@ impl Tail {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_rate_waiting_from_the_run_dir_and_records_it() {
+        let run = std::env::temp_dir().join(format!("panoptes-top-{}", std::process::id()));
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::write(run.join("model.json"), r#"{"rate_waiting":7}"#).unwrap();
+        let f = Live::new(run.join("no-resd.sock"), Some(run.clone()), None).poll(None, 0);
+        std::fs::remove_dir_all(&run).unwrap();
+        assert_eq!(f.rate_waiting, 7);
+        assert_eq!(Frame::from_json(&f.to_json()).rate_waiting, 7);
     }
 }

@@ -75,6 +75,19 @@ impl Desk {
         })
     }
 
+    /// A desk on one end of a connected socket, for a test that serves the
+    /// other end.
+    #[cfg(test)]
+    pub fn connected(stream: UnixStream) -> Self {
+        let (read, write) = stream.into_split();
+        Desk {
+            read: BufReader::new(read),
+            write,
+            next_id: 1,
+            stop: Vec::new(),
+        }
+    }
+
     pub async fn call(&mut self, tool: &str, args: &Value) -> Result<Reply, String> {
         let id = self.next_id;
         self.next_id += 1;

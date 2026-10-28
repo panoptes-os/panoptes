@@ -15,6 +15,7 @@
 //! results.jsonl   one line per agent as it finishes: done (claimed), verified
 //! assigned.txt    one line per agent: invoice id (for verify.sh) or task line
 //! summary.json    medians and means over the steps, claimed done vs verified
+//! model.json      live: model calls waiting out a rate-limit cooldown
 //! ```
 //!
 //! An agent's `done` is only its claim. After an invoice agent's run the
@@ -227,6 +228,7 @@ fn summarize(trace: &[Value]) -> Value {
     for k in [
         "phase_wait_ms",
         "acting_wait_ms",
+        "rate_wait_ms",
         "model_ms",
         "harness_ms",
         "queue_ms",
@@ -322,6 +324,7 @@ async fn real_main() -> Result<(), String> {
         })
         .collect();
     std::fs::write(out.join("assigned.txt"), assigned).map_err(|e| e.to_string())?;
+    tokio::spawn(model.clone().publish(out.join("model.json")));
     let trace_file = Arc::new(Mutex::new(
         std::fs::File::create(out.join("trace.jsonl")).map_err(|e| e.to_string())?,
     ));
@@ -423,7 +426,7 @@ async fn real_main() -> Result<(), String> {
                     "error": outcome.error, "note": outcome.note, "url": outcome.url,
                     "reloads": outcome.reloads,
                     "retypes": outcome.retypes, "phase_wait_ms": outcome.phase_wait_ms,
-                    "acting_wait_ms": outcome.acting_wait_ms,
+                    "acting_wait_ms": outcome.acting_wait_ms, "rate_wait_ms": outcome.rate_wait_ms,
                     "cost_usd": (outcome.cost_usd * 1e6).round() / 1e6,
                     "desk_start_ms": start_ms, "wall_ms": t0.elapsed().as_millis() });
             let verdict = match &task.kind {
@@ -479,6 +482,11 @@ async fn real_main() -> Result<(), String> {
             json!(count(&|r| r["verified"] == true && r["attached"] == true));
         summary["failed_checks"] = json!(failed);
     }
+    // Agents whose model calls waited out a rate-limit cooldown, and the
+    // most calls waiting at once.
+    let waited = |r: &Value| r["rate_wait_ms"].as_f64().is_some_and(|w| w > 0.0);
+    summary["rate_limited_agents"] = json!(count(&waited));
+    summary["rate_waiting_peak"] = json!(model.rate_waiting_peak());
     summary["reloads"] = json!(sum("reloads"));
     summary["retypes"] = json!(sum("retypes"));
     summary["wall_s"] = json!((wall * 10.0).round() / 10.0);

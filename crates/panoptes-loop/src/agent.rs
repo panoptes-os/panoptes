@@ -237,6 +237,8 @@ fn summary(obs: &str) -> String {
 pub struct StepTrace {
     pub step: usize,
     pub queue_ms: f64,
+    /// Time the model call waited out the provider's rate-limit cooldown.
+    pub rate_wait_ms: f64,
     pub ttft_ms: f64,
     pub decode_ms: f64,
     pub model_ms: f64,
@@ -277,7 +279,8 @@ impl StepTrace {
     pub fn to_json(&self, agent: usize) -> Value {
         json!({
             "agent": agent, "step": self.step,
-            "queue_ms": self.queue_ms, "ttft_ms": self.ttft_ms, "decode_ms": self.decode_ms,
+            "queue_ms": self.queue_ms, "rate_wait_ms": self.rate_wait_ms,
+            "ttft_ms": self.ttft_ms, "decode_ms": self.decode_ms,
             "model_ms": self.model_ms, "action_ms": self.action_ms,
             "desk_ms": round2(self.desk_ms), "settle_ms": self.settle_ms,
             "observe_ms": self.observe_ms, "step_ms": self.step_ms,
@@ -324,6 +327,7 @@ pub struct Outcome {
     pub retypes: usize,
     pub phase_wait_ms: f64,
     pub acting_wait_ms: f64,
+    pub rate_wait_ms: f64,
     pub cost_usd: f64,
 }
 
@@ -537,6 +541,7 @@ impl Run<'_> {
             retypes: 0,
             phase_wait_ms: 0.0,
             acting_wait_ms: 0.0,
+            rate_wait_ms: 0.0,
             cost_usd: 0.0,
         };
         let mut st = StepTrace::default();
@@ -569,6 +574,7 @@ impl Run<'_> {
             out.retypes += st.retypes;
             out.phase_wait_ms = round2(out.phase_wait_ms + st.phase_wait_ms);
             out.acting_wait_ms = round2(out.acting_wait_ms + st.acting_wait_ms);
+            out.rate_wait_ms = round2(out.rate_wait_ms + st.rate_wait_ms);
             out.cost_usd += st.cost_usd.unwrap_or(0.0);
             if let Some(n) = r.note {
                 out.note = n;
@@ -650,9 +656,13 @@ impl Run<'_> {
         st.model_ms = ms(tm);
         let c = match reply {
             Ok(c) => c,
-            Err(e) => return fail(st, e, None),
+            Err(e) => {
+                st.rate_wait_ms = e.rate_wait_ms;
+                return fail(st, e.error, None);
+            }
         };
         st.queue_ms = c.queue_ms;
+        st.rate_wait_ms = c.rate_wait_ms;
         st.ttft_ms = c.ttft_ms;
         st.decode_ms = c.decode_ms;
         st.reply_bytes = c.text.len();
