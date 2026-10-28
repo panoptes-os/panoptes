@@ -6,9 +6,7 @@
 //! the network: only the process holding the other ends can drive the
 //! browser. Both transports feed the same [`Cdp`] handle.
 //!
-//! Only the commands Panoptes uses have typed helpers, all in [`cmd`], so a
-//! generator from the pinned Chromium's protocol files can replace that one
-//! module later.
+//! Only the commands Panoptes uses have typed helpers, all in [`cmd`].
 
 pub mod cmd;
 

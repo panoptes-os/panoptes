@@ -5,9 +5,9 @@ Linux host.
 
 ## What it does
 
-Each agent gets its own desktop: a Cage compositor running Chromium, or a
-native or Wine app. An agent signs in to web portals and desktop apps the
-way a person would, by reading the screen and clicking and typing.
+Each agent gets its own desktop: a Cage compositor running Chromium. An
+agent signs in to web portals the way a person would, by reading the
+screen and clicking and typing.
 
 Most of an agent's time goes to waiting for the model. While it waits,
 Panoptes freezes the agent's desktop with cgroup v2, so the page uses no
@@ -31,7 +31,6 @@ in [design/measurements.md](design/measurements.md).
 | Parked desktop | 171 to 51.6 MiB; first screenshot 60 ms after wake |
 | Freezing between steps | a busy page (CNN) went from 1.8 cores per agent to 0.2 |
 | Native apps parked | KiCad 1387 to 333 MiB, Blender 871 to 164, LTspice under Wine 215 to 93 |
-| VPN routing, measured but not built | 0.7 MB of kernel memory per agent; 504 Mbps through one shared OpenVPN client |
 | 300 agents, scripted model | 300 of 300 invoices correct |
 | 700 agents, scripted model | 700 of 700 in 19 min; 670 parked at peak, 40.6 MiB each |
 | Real models on Baseten, 10 invoices | DeepSeek V4 Flash 10 of 10 at about $0.075 each; gpt-oss-120b 7 of 10; Kimi K3 3 of 3 at $0.71 to $1.02 |
@@ -49,7 +48,7 @@ panoptes-resd      one per host; freezes waiting desktops, parks idle
                    or swap runs low
 agent, one per     its own cgroup tree
 ├─ desk/           panoptes-desk: the tools above, over MCP or a socket
-└─ kiosk/          Cage and Chromium, or a native or Wine app
+└─ kiosk/          Cage and Chromium
 panoptes-loop      one process driving every agent's model calls
 panoptes top       terminal view of every agent, read from resd
 ```
@@ -67,20 +66,6 @@ panoptes-loop (or any MCP client): click(...)
 The Docker image builds with Nix and runs desks without systemd inside.
 20 agents ran in it under Podman, 20 of 20 correct.
 
-## Business model
-
-The engine is open source under the AGPL. Teams pay for a hosted control
-plane, which stays closed.
-
-| Tier | Gets | Inference |
-|---|---|---|
-| Individuals | The AGPL engine; 30 agents fit on a laptop (about 5 GB running, 1.2 GB parked) | Their own API key, or a local model |
-| Teams | Hosted control plane | Included, through our router to Baseten or Cerebras |
-| Enterprise | Control plane, support, VPN routing into private networks | Included |
-
-Outside contributions will need a contributor license agreement, so the
-control plane can stay closed.
-
 ## The demo
 
 In the demo, 700 agents do invoice entry. Each signs in to a mock supplier
@@ -89,13 +74,7 @@ against a purchase order. We check every result against ERPNext's records.
 
 - The fixture has 20 suppliers, 40 items, 1,000 invoices in 20 layouts,
   and 1,000 purchase orders.
-- One portal can show a CAPTCHA. The agent stops, parks, and waits for a
-  person to solve it.
-- `panoptes top` shows one box per agent. We film it in Alacritty on a
-  phone.
-- DeepSeek V4 Flash runs the demo; 700 invoices cost about $52 at the
-  measured rate. The full run needs about 20 million tokens a minute from
-  the model provider.
+- `panoptes top` shows one box per agent.
 
 ## Status and where you can help
 

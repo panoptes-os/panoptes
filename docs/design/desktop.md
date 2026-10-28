@@ -1,12 +1,12 @@
 # Desktop: one Cage per agent, a trimmed Chromium, 1280x720
 
-Status: proposed, 2026-10-26. This doc covers the userspace each agent
+Research notes, 2026-10-26. This doc covers the userspace each agent
 sees: the compositor, the browser, the screen size, and how agents drive
 them. Numbers come from the test server and its methods in
 [measurements.md](measurements.md); provider limits come from the docs
 linked under [Sources](#sources).
 
-## Recommendation
+## Summary
 
 - One Cage kiosk per agent, on wlroots' headless backend with the pixman
   renderer: one app, 1280x720, output scale 1. It costs about 10 MiB more
@@ -15,9 +15,8 @@ linked under [Sources](#sources).
   network services in the browser process, and a memory-pressure signal
   once the page settles. On the three test pages that cuts one agent's
   charge by 32 to 43 percent, to 143 to 189 MiB.
-- panoptes-desk, one long-lived Wayland and CDP client per kiosk, serves the
-  providers' own computer and browser toolsets and MCP from one coordinate
-  space.
+- panoptes-desk, one per kiosk, drives Chromium over CDP and serves its
+  tools over MCP.
 - Each kiosk frozen between its agent's steps. Page JavaScript ignores the
   refresh rate, and freezing stops all of it: CNN fell from 3 cores per
   agent to a fifth of one, and the next capture took 9 to 16 ms longer.
@@ -341,52 +340,13 @@ Rules:
    ([HeadlessExperimental.pdl][headless-pdl]). These come from the
    protocol and source, not from measurements.
 
-## panoptes-desk drives each kiosk through Wayland and CDP
+## panoptes-desk drives each kiosk through CDP
 
-```text
-agent step
-├─ act       virtual pointer motion_absolute(x, y, 1280, 720), one pointer
-│            and one keyboard held for the kiosk's life
-├─ settle    screencopy copy_with_damage until no damage for a short window
-├─ observe   the provider's choice: screenshot, zoom crop, or the CDP
-│            accessibility tree with element refs
-└─ history   keep the last few screenshots, drop old ones in batches so
-             the provider's prompt cache keeps hitting
-```
-
-panoptes-desk is one process per kiosk. It is a Wayland client of that
-kiosk's Cage and a CDP client of its Chromium, and it serves:
-
-| Interface | Executes |
-|---|---|
-| [`computer_toolset_20260801`][claude-cu] | screenshot, zoom, clicks, drags, type, key, scroll, through screencopy and virtual input |
-| [`browser_toolset_20260801`][claude-bu] | navigate, `read_page` and `find` with element refs mapped to CDP accessibility nodes, page text, form input, tabs |
-| [OpenAI `computer`][openai-cu] | the same actions in OpenAI's schema |
-| MCP | the same tools for any other client |
-
-Rules:
-
-1. Hold one virtual pointer and one virtual keyboard per kiosk. A device
-   created per action loses clicks, as in [wlrctl's bug][cage-305].
-2. Take the accessibility tree from CDP, not AT-SPI: AT-SPI on Wayland has
-   no global coordinates ([at-spi2-core #158][atspi-158]).
-3. Capture through the compositor, not only CDP. Native `<select>` popups
-   and context menus are separate surfaces that a page screenshot misses
-   (inference, not yet run).
-
-## Cage needs four patches
-
-Cage 0.3.1 binds every protocol for every client on its socket; it has no
-global filter. Panoptes' kiosk fork adds:
-
-1. A client filter, or security-context-v1, so only panoptes-desk can bind
-   capture, virtual input, and output management.
-2. ext-image-copy-capture with an output source.
-   [wlroots 0.20][wlroots-020] deprecated wlr-screencopy in its favor.
-3. ext-data-control, for clipboard access without focus.
-4. Render on demand, for kiosks kept thawed at a low rate: render a frame
-   as soon as a capture arrives. A compositor capture otherwise waits a
-   frame period, 500 ms at 2 Hz; CDP captures already force a frame.
+panoptes-desk is one process per kiosk. It drives Chromium over the Chrome
+DevTools Protocol on a pipe, and serves screenshot, click, type, key,
+scroll, navigate, and accessibility-tree tools over MCP and a Unix socket.
+The accessibility tree comes from CDP, not AT-SPI: AT-SPI on Wayland has
+no global coordinates ([at-spi2-core #158][atspi-158]).
 
 ## Sources
 

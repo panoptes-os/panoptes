@@ -4,12 +4,11 @@
 
 Run hundreds of graphical AI agents on one Linux box.
 
-Each agent gets its own desktop: a Cage compositor running Chromium, or a
-native or Wine app. While an agent waits for its model, Panoptes freezes
-its desktop with cgroup v2. When the agent has been idle for a while,
-Panoptes compresses the desktop's memory into zswap with writeback off. A
-parked desktop holds about 40 MiB and takes about 100 ms to wake and take
-a screenshot.
+Each agent gets its own desktop: a Cage compositor running Chromium.
+While an agent waits for its model, Panoptes freezes its desktop with
+cgroup v2. When the agent has been idle for a while, Panoptes compresses
+the desktop's memory into zswap with writeback off. A parked desktop
+holds about 40 MiB and takes about 100 ms to wake and take a screenshot.
 
 ![panoptes top during the 700-agent run](docs/assets/top.gif)
 
@@ -24,7 +23,7 @@ many agents from one process with any OpenAI-compatible model API.
 Status: prototype. On one host with 32 threads and 125 GiB of RAM, 700
 agents entered 700 of 700 test invoices correctly, with 670 parked at the
 peak. That run used a scripted model that answers from the test data, to
-measure Panoptes itself; real models have run 10 invoices so far.
+measure Panoptes itself; real models have run 10 invoices.
 [docs/one-pager.md](docs/one-pager.md) has the numbers, and
 [docs/design/](docs/design/README.md) explains how each was measured.
 

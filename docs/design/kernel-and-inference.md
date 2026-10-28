@@ -1,30 +1,25 @@
 # Kernel and inference: memory is the lever, the network is not
 
-Status: proposed, 2026-10-26. This doc answers question C: where kernel
-scheduling, network I/O, and local inference can raise agent density.
+Research notes, 2026-10-26: where kernel scheduling, network I/O, and
+local inference can raise agent density.
 Numbers come from the test server, described in
 [measurements.md](measurements.md); the residency states it refers to are
 in [scheduler.md](scheduler.md).
 
-## Recommendation
+## Summary
 
-- Memory: park idle kiosks into zswap with zsmalloc and zstd. A parked
-  kiosk holds about a quarter of its running charge. Give each kiosk a
-  `memory.zswap.max`, turn writeback off while it is parked, and size swap
-  for the parked total.
-- CPU: stay on EEVDF with `cpu.weight`. Add sched_ext only after a
-  CPU-saturated host shows a latency loss that weights cannot fix.
-- KSM: on only for hosts that stay short of memory after parking, and only
-  within one credential domain. It saved 8 percent across 64 agents.
-- Network: change nothing in the kernel. A new TLS connection to a model
+- Memory: parked in zswap with zsmalloc and zstd, an idle kiosk holds
+  about a quarter of its running charge. Writeback stays off while it is
+  parked, so swap must hold the parked total.
+- CPU: Panoptes sets `cpu.weight` on EEVDF. sched_ext was not tried; the
+  test server's kernel lacks it.
+- KSM saved 8 percent across 64 agents of one build. Panoptes does not
+  turn it on.
+- Network: the kernel needs no changes. A new TLS connection to a model
   API took 22 to 51 ms against a step of seconds, and the kernel's fast
-  paths save microseconds. Reuse connections instead.
-- Kernel: ship 6.12. kernel.org maintains it to December 2028 and the
-  [CIP project][cip-slts] for at least ten years. Panoptes' workarounds cover
-  each 6.12 gap listed below.
-- Inference: one vLLM engine per GPU, with FP8 weights, prefix caching,
-  append-only histories, and few screenshots in each history. One RTX 3090
-  keeps 8 to 16 screenshot agents stepping, about 1.7 steps per second in
+  paths save microseconds. Reusing connections saves the milliseconds.
+- Inference: one RTX 3090 running vLLM with FP8 weights and prefix caching
+  kept 8 to 16 screenshot agents stepping, about 1.7 steps per second in
   all, against the 700 kiosks the host's memory holds.
 
 ## Parking is the kernel lever that pays
@@ -119,7 +114,7 @@ merged page takes measurably longer, which leaks memory contents between
 processes, and [Flip Feng Shui][flip-feng-shui] combined merging with
 Rowhammer to corrupt another VM's memory.
 
-## CPU: weights on EEVDF; sched_ext waits
+## CPU: weights on EEVDF
 
 [scheduler.md](scheduler.md#agents-get-cpu-by-weight-never-by-cap) has the
 contention measurement. The kernel facts behind it:
@@ -153,8 +148,7 @@ From the test server, medians of 10 new connections:
 
 A model step takes seconds, so a new TLS connection costs a few percent of
 it and a reused one costs nothing. The work that pays is in user space:
-reuse connections to model APIs, and share them across a host's agents
-through one egress proxy that also holds the credentials (proposal).
+reusing connections to model APIs.
 
 Kernel network features, against that budget:
 
@@ -263,13 +257,6 @@ Rules:
 | a reclaim target above what a kernel-memory-only cgroup can reclaim spins for minutes | unverified | a timeout on every reclaim write |
 | `cpu.max` throttling stalls lock waiters | [task-based throttling][task-throttle], queued for 6.18 | no `cpu.max` on agents |
 | zswap's default allocator is a build-time choice, and zbud was the default here | zsmalloc only by 6.18 | `zswap.zpool=zsmalloc` on the kernel command line |
-
-Both LTS kernels end at kernel.org in [December 2028][kernel-releases],
-short of the five-year window in [base-os.md](base-os.md). CIP maintains
-6.12 to 2035, but its CVE triage
-[takes CIP's kernel configuration into account][cip-slts]. Whether that
-configuration covers Panoptes' subsystems, such as KVM, zswap, and the NVIDIA
-driver's interfaces, is open.
 
 ## Sources
 

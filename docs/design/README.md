@@ -1,20 +1,16 @@
-# Panoptes design: the agent-native distro
+# Panoptes design notes
 
-Status: proposed, 2026-10-26. These docs come from one research and test
-run on a 32-thread, 125 GiB server with an RTX 3090. They answer four
-questions: what base OS to ship, what each agent's desktop should be, what
-an agent container is and what schedules it, and where kernel and
-inference work pays off.
+These notes come from one research and test run on 2026-10-26, on a
+32-thread, 125 GiB server with an RTX 3090. They cover each agent's
+desktop, what an agent container is and what schedules it, and where
+kernel and inference work pays off.
 
 | Doc | Question | Answer |
 |---|---|---|
-| [base-os.md](base-os.md) | Will enterprises adopt NixOS? Should containers use a lighter base? | Yes, as an appliance whose lifecycle Panoptes owns. Containers get light by sharing pages, not from a smaller distro |
-| [desktop.md](desktop.md) | Which compositor, browser, and screen size, and how agents drive them | One Cage per agent, a trimmed Chromium frozen between steps, 1280x720 at scale 1, and panoptes-desk serving the providers' toolsets |
-| [scheduler.md](scheduler.md) | What an agent container is, and what schedules it | A systemd cgroup tree. A residency manager on each host parks idle kiosks; Kubernetes cannot |
-| [kernel-and-inference.md](kernel-and-inference.md) | Where kernel and inference work pays | Memory parking pays, network work does not, 6.12 is the kernel, and the GPU sets local density |
-| [decisions.md](decisions.md) | What was decided on 2026-10-27, and what supersedes what | Panoptes: an AGPL engine in a Docker image, a closed control plane, individuals first, VPN routing on day 1 |
-| [build-plan.md](build-plan.md) | What to build first, in what order, and how each step passes | A Rust workspace; six milestones from cgroup library to a 24 h pilot soak, each gated by a bench number |
-| [nt-on-linux.md](nt-on-linux.md) | Can real Windows DLLs run on Linux without a VM? | Maybe; a one to two week probe after the pitch decides |
+| [desktop.md](desktop.md) | Which compositor, browser, and screen size, and how agents drive them | One Cage per agent, a trimmed Chromium frozen between steps, 1280x720 at scale 1, and panoptes-desk serving its tools over MCP |
+| [scheduler.md](scheduler.md) | What an agent container is, and what schedules it | A cgroup tree. A residency manager on each host parks idle kiosks; Kubernetes cannot |
+| [kernel-and-inference.md](kernel-and-inference.md) | Where kernel and inference work pays | Memory parking pays, network work does not, and the GPU sets local density |
+| [decisions.md](decisions.md) | What was decided on 2026-10-27 | Panoptes: an AGPL engine in a Docker image built with Nix, its own agent loop, and MCP for other harnesses |
 | [measurements.md](measurements.md) | How each number was taken | Machine, versions, methods, caveats |
 
 ## Findings
@@ -45,7 +41,7 @@ inference work pays off.
    A weight of 10000 restored the idle host's latency; half-CPU caps did
    not help.
 8. KSM saved 8 percent across 64 agents of one build, for 108 s of ksmd
-   CPU. It is a second step after parking, inside one credential domain.
+   CPU.
 9. The network is not where agent time goes. A new TLS connection to a
    model API took 22 to 51 ms, and a page load moved 0.7 to 1.7 MB, against
    a model step of seconds. Kernel fast paths save microseconds;
@@ -57,30 +53,24 @@ inference work pays off.
     tripled throughput. gpt-oss-20b on accessibility-tree text peaked at
     the same 1.75 steps/s, and halved once its cache overflowed.
 11. The agent loop is not free. Idle at their first screen, Claude Code and
-    Codex each hold about 85 MiB of their own, half a lean kiosk. Budget,
-    park, and share loops like kiosks.
-12. kernel.org ends both current LTS kernels in December 2028. Only CIP's
-    6.12 meets a five-year support promise.
-13. Page JavaScript ignores the refresh rate, so freeze each kiosk between
+    Codex each hold about 85 MiB of their own, half a lean kiosk.
+12. Page JavaScript ignores the refresh rate, so freeze each kiosk between
     its agent's steps. At 2 Hz, CNN still used 1.8 cores per agent between
     steps; frozen, it used a fifth of one, and the next capture took 9 to
     16 ms longer. Hiding the page helps busy pages as much, but costs
     settled ones a re-raster.
-14. A shared browser saves memory only while agents run: about 105 MiB per
+13. A shared browser saves memory only while agents run: about 105 MiB per
     agent against a lean kiosk's 177. Parking one agent inside it freed only
     33 to 70 MiB, because only memory charged to the agent's own cgroup can
     be reclaimed. A parked agent kept 40 to 75 MiB, against a parked lean
     kiosk's 33 to 46.
 
-## What is not settled
+## Not measured
 
-- The threat model decides the isolation tier: units on the host kernel
-  for one credential domain, or one microVM per unit for untrusted work.
 - Agent task success at 720p against 1080p is unmeasured; every resolution
   claim here is about cost.
 - Freezes between steps lasted about 4 s and parks 20 s; one 180 s freeze
   inside a shared browser resumed cleanly. Whether a page's live
   connections and login sessions survive minutes or hours is untested.
-- Parking the agent loop with its kiosk is proposed, not measured.
 - The bench scripts are in `bench/` and their raw results in
   `bench/results/`; most still assume the test server's paths.

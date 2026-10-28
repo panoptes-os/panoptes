@@ -1,25 +1,21 @@
 # Scheduler: each host decides which agents stay resident
 
-Status: proposed, 2026-10-26. This doc answers question B: what an agent
-container is, and what schedules it. Terms follow
-[architecture.md](../architecture.md): a kiosk is one Cage and the app it
-runs, an agent is the loop that drives kiosks, and a unit is the trust
-boundary around both. Numbers come from the test server, described in
+Research notes, 2026-10-26: what an agent container is, and what
+schedules it. A kiosk is one Cage and the app it runs, an agent is the
+loop that drives kiosks, and a unit is the trust boundary around both.
+Numbers come from the test server, described in
 [measurements.md](measurements.md).
 
-## Recommendation
+## Summary
 
-- An agent container is a cgroup tree that systemd manages: one slice per
-  unit, one service per kiosk and per agent loop. OCI images stay the
-  packaging format, and Podman with crun runs a workload that ships as one.
-  dockerd does not manage agents.
+- An agent container is a cgroup tree. Panoptes creates each agent's tree
+  itself and starts its processes in it with `clone3(CLONE_INTO_CGROUP)`;
+  neither systemd nor dockerd manages agents.
 - Density comes from residency, not placement. A residency manager on each
   host moves every kiosk between running, frozen, parked in compressed
   memory, and evicted to disk.
-- A cluster scheduler, if one is used, places units on hosts. It does not
-  run an agent's lifecycle: Kubernetes can neither pause nor compress a pod.
-- Two isolation tiers: units on the host kernel within one credential
-  domain, and one microVM per unit for untrusted or multi-tenant work.
+- A cluster scheduler cannot run an agent's lifecycle: Kubernetes can
+  neither pause nor compress a pod.
 
 ## An agent container is a cgroup tree
 
@@ -76,13 +72,9 @@ adds half again before it holds any history. A working session also starts
 each MCP server as its own process.
 
 1. Budget an agent as kiosk plus loop.
-2. Park the loop with its kiosk once its model stream has closed: between
-   turns the loop is idle too.
-3. Run one MCP server per kiosk, panoptes-desk from
+2. Run one MCP server per kiosk, panoptes-desk from
    [desktop.md](desktop.md), instead of one process per tool family.
-4. Where the harness allows it, run many loops in one process, or run the
-   loops off the host and let them call panoptes-desk over MCP (proposal, not
-   measured).
+3. Run many loops in one process where the harness allows it.
 
 ## Kubernetes cannot park an agent
 
@@ -169,18 +161,6 @@ Rules:
    frozen by a direct `cgroup.freeze` write waited in `stop-sigterm` for
    the full 90 s `TimeoutStopSec`, then got SIGKILL.
 
-## Units move between hosts only when evicted
-
-A running or parked kiosk lives in one host's kernel, and moving it needs
-CRIU, which rule 7 rules out, or the microVM tier. The control plane
-therefore moves a unit only when it is evicted: it copies the profile and
-session file, then starts the unit on the new host. Browserbase persists
-sessions the same way, as [the Chromium user-data directory][bb-contexts].
-
-Placement follows from parking. A host accepts a new unit while its
-running and parked kiosks fit in RAM; when nothing fits, it evicts the
-least recently active kiosk first.
-
 ## Agents get CPU by weight, never by cap
 
 On the 32-thread test server, one acting kiosk clicks a button, waits two
@@ -210,23 +190,6 @@ work hits that edge. On 6.12 a throttled group also stalls whoever waits on
 a lock that one of its tasks holds. [Task-based throttling][task-throttle]
 fixes that and was queued for 6.18 (inference from the tip tree's date).
 
-Proposal: work nobody waits on, such as the builds and tests an agent
-starts, runs in a child of its unit at `cpu.idle=1`. Kiosks and loops keep
-the default weight, and panoptes-desk can raise a kiosk's weight for the
-length of one action.
-
-## Two isolation tiers and one candidate
-
-| Tier | Boundary | Park | Cost per agent | Use when |
-|---|---|---|---|---|
-| unit on the host kernel | namespaces, seccomp, and Landlock from systemd sandboxing, on a shared kernel | freeze and zswap | 0.8 MiB for the sandboxed service, plus the kiosk | every agent on the host belongs to one credential domain |
-| microVM per unit, Cloud Hypervisor | KVM | [snapshot to a memory file, restore copy-on-write][chv-snapshot] | a guest kernel and its own page cache; about 13 MB for the VMM ([NSDI 2020][firecracker-nsdi]) | untrusted code, or several tenants on one host |
-| gVisor per unit | the Sentry, a userspace kernel | [`runsc checkpoint`][gvisor-cr] | 10 to 11 MB per sandbox in a [2021 study][runtime-study] | not yet: Chromium's sandbox and Wayland under runsc are untested |
-
-The 3090 stays with one host engine in both tiers. GeForce cards support
-neither [MIG][mig] nor [vGPU][vgpu], so passthrough would give the whole
-card to one VM. MicroVM agents reach the engine proxy over vsock.
-
 ## Alternatives
 
 | Option | Why it loses |
@@ -236,9 +199,6 @@ card to one VM. MicroVM agents reach the engine proxy over vsock.
 | Nomad | places services well, but has only an Enterprise [`alloc pause`][nomad-pause] |
 | Incus system containers | pause works, but [CRIU migration][incus-move] works only for "very basic containers" |
 | Proxmox, a VM per agent | QEMU costs about 131 MB per VM ([NSDI 2020][firecracker-nsdi]), and Proxmox [turns KSM on across VMs][pve-ksm] by default |
-
-Reopen when Kubernetes ships pod suspend and resume, or when a buyer runs
-untrusted agents. In the second case, start at the microVM tier.
 
 ## Sources
 
