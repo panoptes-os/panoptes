@@ -2,6 +2,8 @@
 # gate.sh ARM PROVIDER INVOICES [COST_CAP]: clean.sh the invoices, then one
 # panoptes-loop per invoice in turn (one agent at a time), each verified by
 # the loop over ERPNext's REST API. Output in panoptes-run/gate/ARM/INVOICE/.
+# Stops once the account ledger reaches BUDGET_USD (default 4.95, under the
+# $5 free credit). BASE picks the config (default base.json).
 set -uo pipefail
 B=/var/tmp/glarb-bench G=$B/panoptes-run/gate S=$B/scripts/gate
 . $B/scripts/loop/jq.sh
@@ -16,5 +18,5 @@ for i in ${inv//,/ }; do
     > $G/$arm/$i.summary 2> $G/$arm/$i.log
   echo "$i loop exit $? spent $(cat $G/spent.usd 2>/dev/null || echo 0)"
   jq -c '{invoice, done, verified, attached, failed, steps, cost_usd, error, wall_ms}' $G/$arm/$i/results.jsonl
-  if awk -v s="$(cat $G/spent.usd 2>/dev/null || echo 0)" 'BEGIN{exit !(s >= 4.5)}'; then echo "budget reached"; break; fi
+  if awk -v s="$(cat $G/spent.usd 2>/dev/null || echo 0)" -v b="${BUDGET_USD:-4.95}" 'BEGIN{exit !(s >= b)}'; then echo "budget reached"; break; fi
 done
