@@ -1,7 +1,7 @@
 # Panoptes one-pager
 
 As of 2026-10-28. Panoptes runs hundreds of graphical AI agents on one
-Linux host. We pitch it to a16z on Nov 1 and YC on Nov 2.
+Linux host.
 
 ## What it does
 
@@ -81,7 +81,7 @@ plane, which stays closed.
 Outside contributions will need a contributor license agreement, so the
 control plane can stay closed.
 
-## Pitch week
+## The demo
 
 In the demo, 700 agents do invoice entry. Each signs in to a mock supplier
 portal with no API, downloads an invoice PDF, and enters it in ERPNext
@@ -94,9 +94,8 @@ against a purchase order. We check every result against ERPNext's records.
 - `panoptes top` shows one box per agent. We film it in Alacritty on a
   phone.
 - DeepSeek V4 Flash runs the demo; 700 invoices cost about $52 at the
-  measured rate. Our Baseten account allows 500,000 tokens a minute, and
-  the run needs about 20 million, so we are asking Baseten for a higher
-  limit.
+  measured rate. The full run needs about 20 million tokens a minute from
+  the model provider.
 
 ## Status and where you can help
 
@@ -115,6 +114,5 @@ Where to start:
 
 - [ ] Read [design/decisions.md](design/decisions.md) and
       [design/README.md](design/README.md).
-- [ ] Pick a part to own: desk tools, loop prompts, resd policy, or the
-      `top` dashboard.
-- [ ] Help script and film the demo before Nov 1.
+- [ ] Pick a part to work on: desk tools, loop prompts, resd policy, or
+      the `top` dashboard.
