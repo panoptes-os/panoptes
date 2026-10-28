@@ -5,7 +5,8 @@
 # phase, desks started at START_PER_S (default 10). Records panoptes top
 # (TOP=1, default) to top.replay.jsonl with a pane capture every 15 s.
 # A sampler writes sys.tsv every 2 s and creates the stop file, which halts
-# new launches, if MemAvailable falls under 8 GiB or swap use passes 100 GiB.
+# new launches, if MemAvailable falls under 8 GiB or swap use passes
+# SWAP_STOP_GIB (default 200).
 # Results: panoptes-run/loop/NAME/. Needs jq.
 set -uo pipefail
 
@@ -59,7 +60,7 @@ $P/panoptes-oracle --truth $D/truth.jsonl --creds $D/creds.tsv --delay-ms "$DELA
     desks=$(ls /sys/fs/cgroup/panoptes.slice 2> /dev/null | grep -c '^pdesk-loop-')
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$(cut -d' ' -f1 /proc/loadavg)" "$m" "$st" "$desks" "${ino:-0}"
     read -r _ _ avail swap <<< "$(tr '\t' ' ' <<< "x $m")"
-    if [ "$avail" -lt $((8 << 20)) ] || [ "$swap" -gt $((100 << 20)) ]; then
+    if [ "$avail" -lt $((8 << 20)) ] || [ "$swap" -gt $((${SWAP_STOP_GIB:-200} << 20)) ]; then
       [ -e "$STOP" ] || { touch "$STOP"; echo "STOP $(date +%s) avail=$avail swap=$swap" >&2; }
     fi
     n=$((n + 1))

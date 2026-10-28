@@ -124,15 +124,28 @@ fn content(m: &Value) -> &str {
     m["content"].as_str().unwrap_or("")
 }
 
+/// The invoice a task is about. The loop hands an agent only the invoice
+/// number and the portal, as a clerk gets them; numbers repeat across
+/// suppliers, so the portal decides. An `invoice_file:` line, from older
+/// tasks, names the truth row directly.
+fn find_truth<'a>(o: &'a Oracle, task: &str) -> Result<&'a flow::Truth, String> {
+    let line = |key: &str| task.lines().find_map(|l| l.strip_prefix(key)).map(str::trim);
+    if let Some(file) = line("invoice_file:") {
+        return o.truth.get(file).ok_or(format!("{file} is not in the truth file"));
+    }
+    let no = line("Invoice number:").ok_or("no invoice number in the task")?;
+    let portal = line("Supplier portal:").ok_or("no supplier portal in the task")?;
+    o.truth
+        .values()
+        .find(|t| t.invoice_no == no && t.portal_login == portal)
+        .ok_or(format!("{no} at {portal} is not in the truth file"))
+}
+
 /// The next reply for one conversation, as the JSON text the model emits.
 fn answer(o: &Oracle, messages: &[Value]) -> Result<String, String> {
     let task = messages.iter().find(|m| m["role"] == "user").map(content).unwrap_or("");
-    let file = task
-        .lines()
-        .find_map(|l| l.strip_prefix("invoice_file:"))
-        .map(str::trim)
-        .ok_or("no invoice_file line in the task")?;
-    let t = o.truth.get(file).ok_or(format!("{file} is not in the truth file"))?;
+    let t = find_truth(o, task)?;
+    let file = t.file.as_str();
     let note = messages
         .iter()
         .rev()
