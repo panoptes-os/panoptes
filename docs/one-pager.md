@@ -36,11 +36,12 @@ One test server: 32 threads, 125 GiB RAM, one RTX 3090. Methods are in
 | Native apps parked | KiCad 1387 to 333 MiB, Blender 871 to 164, LTspice under Wine 215 to 93 |
 | VPN routing | 0.7 MB kernel memory per agent; 504 Mbps through one shared OpenVPN client |
 | Agent loop, scripted model, 300 agents | 300 of 300 invoices correct |
-| Agent loop, scripted model, 700 agents | 403 of 700; host limits, fixes known (see Status) |
+| Agent loop, scripted model, 700 agents | 700 of 700 in 19 min; 670 parked at peak, 40.6 MiB each |
+| Real models on Baseten, 10 invoices | DeepSeek V4 Flash 10 of 10 at about $0.075 each; gpt-oss-120b 7 of 10; Kimi K3 3 of 3 at $0.71 to $1.02 |
 | Container mechanism | 0.4 to 2.9 MiB per instance; Docker 5.9 |
 
-The scripted model is a fake that answers instantly, so these runs test
-Panoptes, not model accuracy. Real-model runs on Baseten are in progress.
+The scripted model is a fake that answers after 2 s, so those runs test
+Panoptes, not model accuracy; the Baseten row tests the models.
 
 ## Architecture
 
@@ -92,14 +93,14 @@ the score is checkable.
   for a person; it never solves CAPTCHAs itself.
 - The command center is `panoptes top`, one box per agent, in Alacritty,
   filmed on a phone.
-- Kimi K3 is the ceiling model; DeepSeek V4 Flash and gpt-oss-120b set the
-  price story.
+- DeepSeek V4 Flash runs the demo: 700 invoices cost about $52. Kimi K3
+  is the ceiling model, at about ten times the price.
 
 ## Status and where you can help
 
-The prototype works end to end at 300 agents. At 700 one host limit failed
-297 invoices, and a second cost memory; both are fixed and the rerun is
-pending:
+The prototype runs 700 agents end to end, 700 of 700 correct. The first
+700-agent run scored 403; one host limit failed 297 invoices and a second
+cost memory, both now fixed:
 
 | Problem at 700 | Cause | Fix |
 |---|---|---|
