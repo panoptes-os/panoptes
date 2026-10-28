@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scale.sh NAME N DELAY_MS: panoptes-loop with the oracle over N invoices,
 # desks under panoptes-resd (park after PARK_MS, default 10000), at most
-# ACTING (default 40) thawed kiosks at once, ERP_CAP (default 25) in the erp
+# ACTING (default 40) thawed kiosks at once, ERP_CAP (default 50) in the erp
 # phase, desks started at START_PER_S (default 10). Records panoptes top
 # (TOP=1, default) to top.replay.jsonl with a pane capture every 15 s.
 # A sampler writes sys.tsv every 2 s and creates the stop file, which halts
@@ -11,7 +11,7 @@
 set -uo pipefail
 
 NAME=${1:?usage: scale.sh NAME N DELAY_MS} N=${2:?} DELAY=${3:?}
-PARK_MS=${PARK_MS:-10000} ACTING=${ACTING:-40} ERP_CAP=${ERP_CAP:-25}
+PARK_MS=${PARK_MS:-10000} ACTING=${ACTING:-40} ERP_CAP=${ERP_CAP:-50}
 START_PER_S=${START_PER_S:-10} TOP=${TOP:-1}
 B=/var/tmp/glarb-bench P=$B/panoptes/target/release L=$B/panoptes-run/loop D=$B/demo/data
 SOCK=/run/panoptes/resd.sock R=$L/$NAME STOP=$L/$NAME/STOP

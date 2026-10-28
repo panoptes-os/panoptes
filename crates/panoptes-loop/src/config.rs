@@ -32,7 +32,7 @@ pub struct Config {
     /// Observations kept whole in the prompt; older ones shrink to a line.
     #[serde(default = "default_history_full")]
     pub history_full: usize,
-    /// Most agents at once in a phase, by phase prefix: `{"erp": 25}`.
+    /// Most agents at once in a phase, by phase prefix: `{"erp": 50}`.
     #[serde(default = "default_phase_caps")]
     pub phase_caps: BTreeMap<String, usize>,
     /// Most agents with a thawed kiosk at once: starting, acting, or
@@ -145,7 +145,7 @@ fn default_history_full() -> usize {
     3
 }
 fn default_phase_caps() -> BTreeMap<String, usize> {
-    BTreeMap::from([("erp".to_owned(), 25)])
+    BTreeMap::from([("erp".to_owned(), 50)])
 }
 fn default_acting_cap() -> usize {
     40
