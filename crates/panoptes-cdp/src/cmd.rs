@@ -60,9 +60,13 @@ impl Cdp {
     }
 
     pub async fn discover_targets(&self) -> Result<()> {
-        self.call(None, "Target.setDiscoverTargets", json!({ "discover": true }))
-            .await
-            .map(drop)
+        self.call(
+            None,
+            "Target.setDiscoverTargets",
+            json!({ "discover": true }),
+        )
+        .await
+        .map(drop)
     }
 
     /// Save downloads to `dir` under their suggested names, with progress
@@ -179,7 +183,12 @@ impl Session {
 
     /// Enable the domains whose events the desk tracks.
     pub async fn enable(&self) -> Result<()> {
-        for m in ["Page.enable", "Network.enable", "DOM.enable", "Accessibility.enable"] {
+        for m in [
+            "Page.enable",
+            "Network.enable",
+            "DOM.enable",
+            "Accessibility.enable",
+        ] {
             self.call(m, json!({})).await?;
         }
         self.call("Page.setLifecycleEventsEnabled", json!({ "enabled": true }))
@@ -299,8 +308,10 @@ impl Session {
                     match val {
                         Value::Bool(true) => states.push(name.to_owned()),
                         Value::String(s)
-                            if matches!(name, "checked" | "pressed" | "invalid" | "autocomplete")
-                                && s != "false" =>
+                            if matches!(
+                                name,
+                                "checked" | "pressed" | "invalid" | "autocomplete"
+                            ) && s != "false" =>
                         {
                             states.push(format!("{name}={s}"));
                         }
@@ -378,7 +389,9 @@ impl Session {
             FileInput::Node(id) => p["backendNodeId"] = json!(id),
             FileInput::Selector(sel) => {
                 let expr = format!("document.querySelector({})", json!(sel));
-                let v = self.call("Runtime.evaluate", json!({ "expression": expr })).await?;
+                let v = self
+                    .call("Runtime.evaluate", json!({ "expression": expr }))
+                    .await?;
                 let obj = v["result"]["objectId"]
                     .as_str()
                     .ok_or_else(|| shape("Runtime.evaluate", "an element matching the selector"))?;
@@ -402,7 +415,10 @@ impl Session {
     /// Center of the node's first content quad, in viewport coordinates.
     pub async fn node_center(&self, backend_id: i64) -> Result<(f64, f64)> {
         let v = self
-            .call("DOM.getContentQuads", json!({ "backendNodeId": backend_id }))
+            .call(
+                "DOM.getContentQuads",
+                json!({ "backendNodeId": backend_id }),
+            )
             .await?;
         let q = v["quads"]
             .as_array()
@@ -411,6 +427,9 @@ impl Session {
             .filter(|q| q.len() == 8)
             .ok_or_else(|| shape("DOM.getContentQuads", "a quad (node not rendered)"))?;
         let c: Vec<f64> = q.iter().map(|x| x.as_f64().unwrap_or(0.0)).collect();
-        Ok(((c[0] + c[2] + c[4] + c[6]) / 4.0, (c[1] + c[3] + c[5] + c[7]) / 4.0))
+        Ok((
+            (c[0] + c[2] + c[4] + c[6]) / 4.0,
+            (c[1] + c[3] + c[5] + c[7]) / 4.0,
+        ))
     }
 }

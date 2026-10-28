@@ -72,7 +72,9 @@ fn args() -> Result<Args, String> {
         }
     }
     if a.truth.is_empty() || a.creds.is_empty() {
-        return Err("usage: panoptes-oracle --truth FILE --creds FILE [--delay-ms N] [--port N]".into());
+        return Err(
+            "usage: panoptes-oracle --truth FILE --creds FILE [--delay-ms N] [--port N]".into(),
+        );
     }
     Ok(a)
 }
@@ -92,7 +94,9 @@ fn load(a: &Args) -> Result<HashMap<String, flow::Truth>, String> {
     for l in truth.lines().filter(|l| !l.trim().is_empty()) {
         let v: Value = serde_json::from_str(l).map_err(|e| format!("truth: {e}"))?;
         let s = |k: &str| v[k].as_str().unwrap_or("").to_owned();
-        let Some(c) = creds.get(&s("slug")) else { continue };
+        let Some(c) = creds.get(&s("slug")) else {
+            continue;
+        };
         out.insert(
             s("file"),
             flow::Truth {
@@ -105,7 +109,12 @@ fn load(a: &Args) -> Result<HashMap<String, flow::Truth>, String> {
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .map(|l| (l["item_code"].as_str().unwrap_or("").to_owned(), l["qty"].as_f64().unwrap_or(f64::NAN)))
+                    .map(|l| {
+                        (
+                            l["item_code"].as_str().unwrap_or("").to_owned(),
+                            l["qty"].as_f64().unwrap_or(f64::NAN),
+                        )
+                    })
                     .collect(),
                 total: v["total"].as_f64().unwrap_or(f64::NAN),
                 portal_login: c[1].clone(),
@@ -129,9 +138,16 @@ fn content(m: &Value) -> &str {
 /// suppliers, so the portal decides. An `invoice_file:` line, from older
 /// tasks, names the truth row directly.
 fn find_truth<'a>(o: &'a Oracle, task: &str) -> Result<&'a flow::Truth, String> {
-    let line = |key: &str| task.lines().find_map(|l| l.strip_prefix(key)).map(str::trim);
+    let line = |key: &str| {
+        task.lines()
+            .find_map(|l| l.strip_prefix(key))
+            .map(str::trim)
+    };
     if let Some(file) = line("invoice_file:") {
-        return o.truth.get(file).ok_or(format!("{file} is not in the truth file"));
+        return o
+            .truth
+            .get(file)
+            .ok_or(format!("{file} is not in the truth file"));
     }
     let no = line("Invoice number:").ok_or("no invoice number in the task")?;
     let portal = line("Supplier portal:").ok_or("no supplier portal in the task")?;
@@ -143,7 +159,11 @@ fn find_truth<'a>(o: &'a Oracle, task: &str) -> Result<&'a flow::Truth, String> 
 
 /// The next reply for one conversation, as the JSON text the model emits.
 fn answer(o: &Oracle, messages: &[Value]) -> Result<String, String> {
-    let task = messages.iter().find(|m| m["role"] == "user").map(content).unwrap_or("");
+    let task = messages
+        .iter()
+        .find(|m| m["role"] == "user")
+        .map(content)
+        .unwrap_or("");
     let t = find_truth(o, task)?;
     let file = t.file.as_str();
     let note = messages
@@ -155,7 +175,11 @@ fn answer(o: &Oracle, messages: &[Value]) -> Result<String, String> {
         .unwrap_or_default();
     let state = flow::state_of(&note);
     let (phase, n) = (&state.phase, state.n);
-    let last = messages.last().filter(|m| m["role"] == "user").map(content).unwrap_or("");
+    let last = messages
+        .last()
+        .filter(|m| m["role"] == "user")
+        .map(content)
+        .unwrap_or("");
     let (results, page) = match last.split_once("Page:\n") {
         Some((r, p)) => (r, p),
         None => ("", last),
@@ -165,7 +189,11 @@ fn answer(o: &Oracle, messages: &[Value]) -> Result<String, String> {
     if let Some(dir) = &o.log_dir {
         use std::io::Write;
         let path = dir.join(format!("{file}.log"));
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
             let _ = writeln!(f, "=== phase={phase} n={n}\n{results}{page}\n>>> {reply}\n");
         }
     }
@@ -207,10 +235,18 @@ async fn completions(State(o): State<Arc<Oracle>>, body: String) -> Response {
     }
     // Hold the first token for the configured delay, then stream the
     // reply in a few pieces the way a model would.
-    let mut events = vec![chunk(&id, json!({ "role": "assistant", "content": "" }), None)];
+    let mut events = vec![chunk(
+        &id,
+        json!({ "role": "assistant", "content": "" }),
+        None,
+    )];
     let chars: Vec<char> = text.chars().collect();
     for piece in chars.chunks(chars.len().div_ceil(4).max(1)) {
-        events.push(chunk(&id, json!({ "content": piece.iter().collect::<String>() }), None));
+        events.push(chunk(
+            &id,
+            json!({ "content": piece.iter().collect::<String>() }),
+            None,
+        ));
     }
     events.push(chunk(&id, json!({}), Some(usage)));
     events.push("data: [DONE]\n\n".into());
@@ -245,12 +281,26 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    eprintln!("panoptes-oracle: {} invoices, delay {} ms, port {}", truth.len(), a.delay_ms, a.port);
-    let o = Arc::new(Oracle { truth, delay: Duration::from_millis(a.delay_ms), served: AtomicU64::new(0),
-                             log_dir: a.log_dir.map(Into::into) });
+    eprintln!(
+        "panoptes-oracle: {} invoices, delay {} ms, port {}",
+        truth.len(),
+        a.delay_ms,
+        a.port
+    );
+    let o = Arc::new(Oracle {
+        truth,
+        delay: Duration::from_millis(a.delay_ms),
+        served: AtomicU64::new(0),
+        log_dir: a.log_dir.map(Into::into),
+    });
     let app = Router::new()
         .route("/v1/chat/completions", post(completions))
-        .route("/v1/models", get(|| async { axum::Json(json!({ "data": [{ "id": "oracle", "object": "model" }] })) }))
+        .route(
+            "/v1/models",
+            get(|| async {
+                axum::Json(json!({ "data": [{ "id": "oracle", "object": "model" }] }))
+            }),
+        )
         .with_state(o);
     let listener = match tokio::net::TcpListener::bind(("127.0.0.1", a.port)).await {
         Ok(l) => l,

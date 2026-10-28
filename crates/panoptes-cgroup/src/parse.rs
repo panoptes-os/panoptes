@@ -177,9 +177,6 @@ mod tests {
 
     #[test]
     fn cpu_usage_parse() {
-        assert_eq!(
-            cpu_usage_us("usage_usec 991\nuser_usec 500\n"),
-            Some(991)
-        );
+        assert_eq!(cpu_usage_us("usage_usec 991\nuser_usec 500\n"), Some(991));
     }
 }

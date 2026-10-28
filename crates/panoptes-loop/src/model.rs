@@ -38,11 +38,17 @@ struct Ledger {
 impl Ledger {
     fn open(budget: &Budget) -> Result<Self, String> {
         let spent = match std::fs::read_to_string(&budget.ledger) {
-            Ok(s) => s.trim().parse().map_err(|e| format!("ledger {}: {e}", budget.ledger.display()))?,
+            Ok(s) => s
+                .trim()
+                .parse()
+                .map_err(|e| format!("ledger {}: {e}", budget.ledger.display()))?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0.0,
             Err(e) => return Err(format!("ledger {}: {e}", budget.ledger.display())),
         };
-        Ok(Ledger { budget: budget.clone(), spent: std::sync::Mutex::new(spent) })
+        Ok(Ledger {
+            budget: budget.clone(),
+            spent: std::sync::Mutex::new(spent),
+        })
     }
 
     fn spent(&self) -> f64 {
@@ -50,7 +56,9 @@ impl Ledger {
     }
 
     fn add(&self, usd: f64) -> f64 {
-        let Ok(mut s) = self.spent.lock() else { return f64::INFINITY };
+        let Ok(mut s) = self.spent.lock() else {
+            return f64::INFINITY;
+        };
         *s += usd;
         let _ = std::fs::write(&self.budget.ledger, format!("{:.6}\n", *s));
         *s
@@ -111,9 +119,7 @@ impl Model {
         if p.http2_prior_knowledge {
             http = http.http2_prior_knowledge();
         }
-        let http = http
-            .build()
-            .map_err(|e| format!("http client: {e}"))?;
+        let http = http.build().map_err(|e| format!("http client: {e}"))?;
         Ok(Model {
             http,
             url: format!("{}/chat/completions", p.base_url.trim_end_matches('/')),
@@ -139,7 +145,11 @@ impl Model {
         if let Some(l) = &self.ledger
             && l.spent() >= l.budget.cap_usd
         {
-            return Err(format!("budget: ${:.4} spent, cap ${}", l.spent(), l.budget.cap_usd));
+            return Err(format!(
+                "budget: ${:.4} spent, cap ${}",
+                l.spent(),
+                l.budget.cap_usd
+            ));
         }
         let mut body = json!({
             "model": self.model,
@@ -187,7 +197,9 @@ impl Model {
 
     fn charge(&self, c: &mut Completion) {
         let Some(price) = &self.price else { return };
-        let (Some(p), Some(o)) = (c.prompt_tokens, c.completion_tokens) else { return };
+        let (Some(p), Some(o)) = (c.prompt_tokens, c.completion_tokens) else {
+            return;
+        };
         let usd = price.cost(p, c.cached_tokens.unwrap_or(0), o);
         c.cost_usd = Some(usd);
         c.spent_usd = self.ledger.as_ref().map(|l| l.add(usd));
@@ -205,7 +217,10 @@ impl Model {
             };
         }
         let sent = Instant::now();
-        let resp = req.send().await.map_err(|e| (true, None, format!("request: {e}")))?;
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| (true, None, format!("request: {e}")))?;
         let status = resp.status();
         if !status.is_success() {
             let retry = status.as_u16() == 429 || status.is_server_error();
@@ -216,7 +231,14 @@ impl Model {
                 .and_then(|v| v.trim().parse::<f64>().ok())
                 .map(|s| Duration::from_secs_f64(s.clamp(0.0, 120.0)));
             let text = resp.text().await.unwrap_or_default();
-            return Err((retry, after, format!("HTTP {status}: {}", text.chars().take(400).collect::<String>())));
+            return Err((
+                retry,
+                after,
+                format!(
+                    "HTTP {status}: {}",
+                    text.chars().take(400).collect::<String>()
+                ),
+            ));
         }
         let mut c = Completion::default();
         let mut first: Option<Instant> = None;
@@ -228,16 +250,23 @@ impl Model {
             while let Some(end) = find(&buf, b"\n\n") {
                 let event: Vec<u8> = buf.drain(..end + 2).collect();
                 for line in String::from_utf8_lossy(&event).lines() {
-                    let Some(data) = line.strip_prefix("data:") else { continue };
+                    let Some(data) = line.strip_prefix("data:") else {
+                        continue;
+                    };
                     let data = data.trim();
                     if data == "[DONE]" {
                         continue;
                     }
-                    let Ok(v) = serde_json::from_str::<Value>(data) else { continue };
+                    let Ok(v) = serde_json::from_str::<Value>(data) else {
+                        continue;
+                    };
                     // Reasoning streams before the content; the first token
                     // of either starts decode.
                     let delta = &v["choices"][0]["delta"];
-                    if ["reasoning_content", "reasoning"].iter().any(|k| delta[k].as_str().is_some_and(|t| !t.is_empty())) {
+                    if ["reasoning_content", "reasoning"]
+                        .iter()
+                        .any(|k| delta[k].as_str().is_some_and(|t| !t.is_empty()))
+                    {
                         first.get_or_insert_with(Instant::now);
                     }
                     if let Some(t) = v["choices"][0]["delta"]["content"].as_str()
@@ -250,7 +279,8 @@ impl Model {
                         c.prompt_tokens = u["prompt_tokens"].as_u64();
                         c.completion_tokens = u["completion_tokens"].as_u64();
                         c.cached_tokens = u["prompt_tokens_details"]["cached_tokens"].as_u64();
-                        c.reasoning_tokens = u["completion_tokens_details"]["reasoning_tokens"].as_u64();
+                        c.reasoning_tokens =
+                            u["completion_tokens_details"]["reasoning_tokens"].as_u64();
                     }
                 }
             }

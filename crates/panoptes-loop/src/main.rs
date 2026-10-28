@@ -61,7 +61,11 @@ fn load_tasks(cfg: &Config, pick: &[String]) -> Result<Vec<Task>, String> {
         order.push(file.clone());
         by_file.insert(file, v);
     }
-    let files: Vec<String> = if pick.is_empty() { cfg.tasks.invoices.clone() } else { pick.to_vec() };
+    let files: Vec<String> = if pick.is_empty() {
+        cfg.tasks.invoices.clone()
+    } else {
+        pick.to_vec()
+    };
     let files = if files.is_empty() { order } else { files };
     files
         .into_iter()
@@ -85,15 +89,29 @@ fn load_tasks(cfg: &Config, pick: &[String]) -> Result<Vec<Task>, String> {
 
 fn args() -> Result<(String, Vec<String>, Option<usize>), String> {
     let mut it = std::env::args().skip(1);
-    let cfg = it.next().ok_or("usage: panoptes-loop CONFIG [--invoices a,b | --first N]")?;
+    let cfg = it
+        .next()
+        .ok_or("usage: panoptes-loop CONFIG [--invoices a,b | --first N]")?;
     let mut pick = Vec::new();
     let mut first = None;
     while let Some(a) = it.next() {
         match a.as_str() {
             "--invoices" => {
-                pick = it.next().ok_or("--invoices needs a list")?.split(',').map(str::to_owned).collect();
+                pick = it
+                    .next()
+                    .ok_or("--invoices needs a list")?
+                    .split(',')
+                    .map(str::to_owned)
+                    .collect();
             }
-            "--first" => first = Some(it.next().ok_or("--first needs N")?.parse().map_err(|_| "--first N")?),
+            "--first" => {
+                first = Some(
+                    it.next()
+                        .ok_or("--first needs N")?
+                        .parse()
+                        .map_err(|_| "--first N")?,
+                )
+            }
             other => return Err(format!("unknown argument {other}")),
         }
     }
@@ -109,15 +127,41 @@ fn median(v: &mut [f64]) -> f64 {
 }
 
 fn summarize(trace: &[Value]) -> Value {
-    let steps: Vec<&Value> = trace.iter().filter(|t| t["step"].as_u64().unwrap_or(0) > 0).collect();
+    let steps: Vec<&Value> = trace
+        .iter()
+        .filter(|t| t["step"].as_u64().unwrap_or(0) > 0)
+        .collect();
     let mut out = serde_json::Map::new();
     out.insert("steps".into(), json!(steps.len()));
-    for k in ["phase_wait_ms", "acting_wait_ms", "model_ms", "harness_ms", "queue_ms", "ttft_ms", "decode_ms", "action_ms", "desk_ms", "settle_ms", "observe_ms", "step_ms"] {
+    for k in [
+        "phase_wait_ms",
+        "acting_wait_ms",
+        "model_ms",
+        "harness_ms",
+        "queue_ms",
+        "ttft_ms",
+        "decode_ms",
+        "action_ms",
+        "desk_ms",
+        "settle_ms",
+        "observe_ms",
+        "step_ms",
+    ] {
         let mut v: Vec<f64> = steps.iter().filter_map(|t| t[k].as_f64()).collect();
-        let mean = if v.is_empty() { 0.0 } else { v.iter().sum::<f64>() / v.len() as f64 };
+        let mean = if v.is_empty() {
+            0.0
+        } else {
+            v.iter().sum::<f64>() / v.len() as f64
+        };
         let p50 = median(&mut v);
-        let p95 = v.get((v.len() * 95 / 100).min(v.len().saturating_sub(1))).copied().unwrap_or(0.0);
-        out.insert(k.into(), json!({ "mean": (mean * 10.0).round() / 10.0, "p50": p50, "p95": p95 }));
+        let p95 = v
+            .get((v.len() * 95 / 100).min(v.len().saturating_sub(1)))
+            .copied()
+            .unwrap_or(0.0);
+        out.insert(
+            k.into(),
+            json!({ "mean": (mean * 10.0).round() / 10.0, "p50": p50, "p95": p95 }),
+        );
     }
     Value::Object(out)
 }
@@ -140,7 +184,10 @@ async fn real_main() -> Result<(), String> {
     if let Some(n) = first {
         tasks.truncate(n);
     }
-    let provider = cfg.providers.get(&cfg.provider).ok_or_else(|| format!("no provider {}", cfg.provider))?;
+    let provider = cfg
+        .providers
+        .get(&cfg.provider)
+        .ok_or_else(|| format!("no provider {}", cfg.provider))?;
     let model = Arc::new(model::Model::new(provider, cfg.budget.as_ref())?);
     let out = cfg.out_dir.join(&cfg.run_name);
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
@@ -150,7 +197,11 @@ async fn real_main() -> Result<(), String> {
         std::fs::File::create(out.join("trace.jsonl")).map_err(|e| e.to_string())?,
     ));
     let all_trace = Arc::new(Mutex::new(Vec::<Value>::new()));
-    let system = Arc::new(agent::system_prompt(&cfg.tasks.erp_url, &cfg.tasks.erp_user, &cfg.tasks.erp_password));
+    let system = Arc::new(agent::system_prompt(
+        &cfg.tasks.erp_url,
+        &cfg.tasks.erp_user,
+        &cfg.tasks.erp_password,
+    ));
     let schema = Arc::new(agent::action_schema());
     let phases = Arc::new(agent::Phases::new(&cfg.phase_caps, &cfg.tasks.erp_url));
     let acting = Arc::new(tokio::sync::Semaphore::new(cfg.acting_cap.max(1)));
@@ -161,7 +212,13 @@ async fn real_main() -> Result<(), String> {
     let mut ticks = tokio::time::interval(period);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let starts = Arc::new(tokio::sync::Mutex::new(ticks));
-    let erp = match erp::Erp::login(&cfg.tasks.erp_url, &cfg.tasks.erp_user, &cfg.tasks.erp_password).await {
+    let erp = match erp::Erp::login(
+        &cfg.tasks.erp_url,
+        &cfg.tasks.erp_user,
+        &cfg.tasks.erp_password,
+    )
+    .await
+    {
         Ok(e) => Some(Arc::new(e)),
         Err(e) => {
             eprintln!("panoptes-loop: no verification: {e}");
@@ -179,11 +236,14 @@ async fn real_main() -> Result<(), String> {
     let started = Instant::now();
     let mut handles = Vec::new();
     for (i, task) in tasks.into_iter().enumerate() {
-        let (model, system, schema, cfg) = (model.clone(), system.clone(), schema.clone(), cfg.clone());
+        let (model, system, schema, cfg) =
+            (model.clone(), system.clone(), schema.clone(), cfg.clone());
         let (trace_file, all_trace) = (trace_file.clone(), all_trace.clone());
         let (phases, erp) = (phases.clone(), erp.clone());
         let (acting, starts, results_file) = (acting.clone(), starts.clone(), results_file.clone());
-        let run_dir = Path::new(&cfg.out_dir).join(&cfg.run_name).join(format!("agent-{i}"));
+        let run_dir = Path::new(&cfg.out_dir)
+            .join(&cfg.run_name)
+            .join(format!("agent-{i}"));
         handles.push(tokio::spawn(async move {
             starts.lock().await.tick().await;
             let record = |r: Value| {
@@ -256,7 +316,12 @@ async fn real_main() -> Result<(), String> {
     let steps: Vec<u64> = results.iter().filter_map(|r| r["steps"].as_u64()).collect();
     let sum = |k: &str| results.iter().filter_map(|r| r[k].as_u64()).sum::<u64>();
     let mut failed: std::collections::BTreeMap<String, usize> = Default::default();
-    for f in results.iter().filter_map(|r| r["failed"].as_array()).flatten().filter_map(Value::as_str) {
+    for f in results
+        .iter()
+        .filter_map(|r| r["failed"].as_array())
+        .flatten()
+        .filter_map(Value::as_str)
+    {
         *failed.entry(f.to_owned()).or_default() += 1;
     }
     let mut summary = summarize(&trace);
@@ -264,15 +329,22 @@ async fn real_main() -> Result<(), String> {
     summary["claimed_done"] = json!(count(&|r| r["done"] == true));
     summary["verified"] = json!(count(&|r| r["verified"] == true));
     summary["attached"] = json!(count(&|r| r["attached"] == true));
-    summary["verified_and_attached"] = json!(count(&|r| r["verified"] == true && r["attached"] == true));
+    summary["verified_and_attached"] =
+        json!(count(&|r| r["verified"] == true && r["attached"] == true));
     summary["claimed_not_verified"] = json!(count(&|r| r["done"] == true && r["verified"] != true));
     summary["failed_checks"] = json!(failed);
     summary["reloads"] = json!(sum("reloads"));
     summary["retypes"] = json!(sum("retypes"));
     summary["wall_s"] = json!((wall * 10.0).round() / 10.0);
     summary["steps_per_agent"] = json!(steps);
-    std::fs::write(out.join("summary.json"), serde_json::to_string_pretty(&summary).unwrap_or_default())
-        .map_err(|e| e.to_string())?;
-    println!("{}", serde_json::to_string_pretty(&summary).unwrap_or_default());
+    std::fs::write(
+        out.join("summary.json"),
+        serde_json::to_string_pretty(&summary).unwrap_or_default(),
+    )
+    .map_err(|e| e.to_string())?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&summary).unwrap_or_default()
+    );
     Ok(())
 }

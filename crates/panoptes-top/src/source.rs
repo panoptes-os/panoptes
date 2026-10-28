@@ -54,7 +54,9 @@ impl Frame {
             mem_total: v["mem_total"].as_u64().unwrap_or(0),
             mem_available: v["mem_available"].as_u64().unwrap_or(0),
             cpu: v["cpu"].as_f64().unwrap_or(0.0),
-            gpu: v["gpu"].as_array().and_then(|a| Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?))),
+            gpu: v["gpu"]
+                .as_array()
+                .and_then(|a| Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?))),
             trace: v["trace"].as_array().cloned().unwrap_or_default(),
             results: v["results"].as_array().cloned(),
             assigned: v["assigned"].as_u64().unwrap_or(0) as usize,
@@ -116,7 +118,10 @@ impl Live {
         }
         let (mem_total, mem_available) = meminfo();
         let cpu = self.cpu();
-        if self.gpu_at.is_none_or(|t| t.elapsed() > Duration::from_secs(2)) {
+        if self
+            .gpu_at
+            .is_none_or(|t| t.elapsed() > Duration::from_secs(2))
+        {
             self.gpu = gpu();
             self.gpu_at = Some(Instant::now());
         }
@@ -163,7 +168,9 @@ impl Live {
     }
 
     fn cpu(&mut self) -> f64 {
-        let Some((busy, total)) = proc_stat() else { return 0.0 };
+        let Some((busy, total)) = proc_stat() else {
+            return 0.0;
+        };
         let out = match self.cpu_prev {
             Some((b0, t0)) if total > t0 => (busy - b0) as f64 / (total - t0) as f64,
             _ => 0.0,
@@ -171,7 +178,6 @@ impl Live {
         self.cpu_prev = Some((busy, total));
         out
     }
-
 }
 
 #[derive(Debug)]
@@ -194,7 +200,12 @@ impl Replay {
         if frames.is_empty() {
             return Err(format!("{}: no frames", path.display()));
         }
-        Ok(Replay { frames, next: 0, started: Instant::now(), speed })
+        Ok(Replay {
+            frames,
+            next: 0,
+            started: Instant::now(),
+            speed,
+        })
     }
 
     /// Every frame due by now, merged into one; loops at the end.
@@ -281,11 +292,18 @@ fn proc_stat() -> Option<(u64, u64)> {
 
 fn gpu() -> Option<(f64, f64)> {
     let out = std::process::Command::new("nvidia-smi")
-        .args(["--query-gpu=utilization.gpu,memory.used", "--format=csv,noheader,nounits"])
+        .args([
+            "--query-gpu=utilization.gpu,memory.used",
+            "--format=csv,noheader,nounits",
+        ])
         .output()
         .ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
-    let mut it = text.lines().next()?.split(',').map(|x| x.trim().parse::<f64>());
+    let mut it = text
+        .lines()
+        .next()?
+        .split(',')
+        .map(|x| x.trim().parse::<f64>());
     Some((it.next()?.ok()?, it.next()?.ok()?))
 }
 
@@ -298,7 +316,9 @@ struct Tail {
 
 impl Tail {
     fn read(&mut self, path: &Path) -> Vec<Value> {
-        let Ok(mut file) = File::open(path) else { return Vec::new() };
+        let Ok(mut file) = File::open(path) else {
+            return Vec::new();
+        };
         let len = file.metadata().map(|m| m.len()).unwrap_or(0);
         if len < self.off {
             self.off = 0;
@@ -308,7 +328,9 @@ impl Tail {
             return Vec::new();
         }
         let mut chunk = String::new();
-        let Ok(n) = file.read_to_string(&mut chunk) else { return Vec::new() };
+        let Ok(n) = file.read_to_string(&mut chunk) else {
+            return Vec::new();
+        };
         self.off += n as u64;
         self.buf.push_str(&chunk);
         let mut out = Vec::new();

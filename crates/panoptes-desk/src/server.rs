@@ -15,8 +15,8 @@
 use crate::desk::{Desk, Output, tools};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
-    Implementation, InitializeResult, ListToolsResult, PaginatedRequestParams,
-    ServerCapabilities, ServerConfig, Tool,
+    Implementation, InitializeResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
+    ServerConfig, Tool,
 };
 use rmcp::service::{MaybeSendFuture, RequestContext, RoleServer};
 use rmcp::{ServerHandler, ServiceExt};
@@ -115,7 +115,8 @@ fn timing(out: &Output, start: Instant) -> Value {
 }
 
 fn reply(id: Value, out: Output, start: Instant) -> Value {
-    let mut r = json!({ "id": id, "ok": true, "result": out.result, "timing": timing(&out, start) });
+    let mut r =
+        json!({ "id": id, "ok": true, "result": out.result, "timing": timing(&out, start) });
     if let Some((mime, data)) = out.image {
         r["image"] = json!({ "mime": mime, "data": data });
     }
@@ -146,7 +147,10 @@ struct DeskMcp {
 impl ServerHandler for DeskMcp {
     fn get_info(&self) -> ServerConfig {
         InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("panoptes-desk", env!("CARGO_PKG_VERSION")))
+            .with_server_info(Implementation::new(
+                "panoptes-desk",
+                env!("CARGO_PKG_VERSION"),
+            ))
             .with_instructions(
                 "One Panoptes agent's browser kiosk. Read ax_tree for node ids, act with \
                  click, type, and key, and call wait_settled before the next screenshot.",
@@ -178,7 +182,10 @@ impl ServerHandler for DeskMcp {
     ) -> impl Future<Output = Result<CallToolResponse, ErrorData>> + MaybeSendFuture + '_ {
         let desk = self.desk.clone();
         async move {
-            let args = request.arguments.map(Value::Object).unwrap_or_else(|| json!({}));
+            let args = request
+                .arguments
+                .map(Value::Object)
+                .unwrap_or_else(|| json!({}));
             let start = Instant::now();
             let result = match desk.call(&request.name, &args).await {
                 Ok(out) => {

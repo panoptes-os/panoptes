@@ -23,8 +23,17 @@ use std::time::{Duration, Instant};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 const TOOLS: &[&str] = &[
-    "navigate", "click", "type", "key", "scroll", "wait_settled", "download_list", "upload",
-    "read_pdf", "reload", "screenshot",
+    "navigate",
+    "click",
+    "type",
+    "key",
+    "scroll",
+    "wait_settled",
+    "download_list",
+    "upload",
+    "read_pdf",
+    "reload",
+    "screenshot",
 ];
 
 /// Brackets a PDF's text in an observation, so shortening keeps it.
@@ -33,7 +42,9 @@ const PDF_CLOSE: &str = "--- end of PDF text ---";
 
 /// Calls after which the page may be changing, so the loop waits for it to
 /// settle before it reads the tree.
-const MUTATING: &[&str] = &["navigate", "click", "key", "type", "scroll", "upload", "reload"];
+const MUTATING: &[&str] = &[
+    "navigate", "click", "key", "type", "scroll", "upload", "reload",
+];
 
 /// Reloads of an error page before the loop hands it to the model.
 const RELOADS: u32 = 3;
@@ -144,11 +155,18 @@ pub fn parse(text: &str) -> Result<Plan, String> {
         if !TOOLS.contains(&tool) {
             return Err(format!("unknown tool {tool}"));
         }
-        let args = if a["args"].is_null() { json!({}) } else { a["args"].clone() };
+        let args = if a["args"].is_null() {
+            json!({})
+        } else {
+            a["args"].clone()
+        };
         if !args.is_object() {
             return Err(format!("{tool}: args must be an object"));
         }
-        out.push(Action { tool: tool.to_owned(), args });
+        out.push(Action {
+            tool: tool.to_owned(),
+            args,
+        });
     }
     Ok(Plan {
         actions: out,
@@ -184,7 +202,9 @@ fn summary(obs: &str) -> String {
     let mut s = format!("(earlier observation, shortened) {page}");
     // A PDF's text is read once and needed until the end.
     if let Some(at) = obs.find(PDF_OPEN) {
-        let end = obs[at..].find(PDF_CLOSE).map_or(obs.len(), |e| at + e + PDF_CLOSE.len());
+        let end = obs[at..]
+            .find(PDF_CLOSE)
+            .map_or(obs.len(), |e| at + e + PDF_CLOSE.len());
         s.push('\n');
         s.push_str(&obs[at..end]);
     }
@@ -305,14 +325,25 @@ impl Phases {
     }
 
     fn cap(&self, phase: &str) -> Option<&(String, Arc<Semaphore>)> {
-        self.caps.iter().find(|(k, _)| phase.starts_with(k.as_str()))
+        self.caps
+            .iter()
+            .find(|(k, _)| phase.starts_with(k.as_str()))
     }
 
     fn of(&self, plan: &Plan, current: Option<&str>) -> Option<String> {
-        if let Some(p) = plan.note.split([';', ' ', ',']).find_map(|w| w.strip_prefix("phase=")) {
+        if let Some(p) = plan
+            .note
+            .split([';', ' ', ','])
+            .find_map(|w| w.strip_prefix("phase="))
+        {
             return self.cap(p).map(|c| c.0.clone());
         }
-        let url = plan.actions.iter().rev().find(|a| a.tool == "navigate").and_then(|a| a.args["url"].as_str());
+        let url = plan
+            .actions
+            .iter()
+            .rev()
+            .find(|a| a.tool == "navigate")
+            .and_then(|a| a.args["url"].as_str());
         match url {
             Some(u) if u.starts_with(&self.erp) => self.cap("erp").map(|c| c.0.clone()),
             Some(_) => None,
@@ -342,7 +373,9 @@ pub fn error_page(tree: &str) -> Option<String> {
     for line in tree.lines() {
         let l = line.trim_start();
         let depth = line.len() - l.len();
-        let Some((_, rest)) = l.strip_prefix('[').and_then(|r| r.split_once("] ")) else { continue };
+        let Some((_, rest)) = l.strip_prefix('[').and_then(|r| r.split_once("] ")) else {
+            continue;
+        };
         let (role, rest) = rest.split_once(' ').unwrap_or((rest, ""));
         if dialog.is_some_and(|d| depth <= d) {
             dialog = None;
@@ -353,7 +386,10 @@ pub fn error_page(tree: &str) -> Option<String> {
         if dialog.is_some() {
             continue;
         }
-        let name = rest.strip_prefix('"').map(|r| quoted(r).0).unwrap_or_default();
+        let name = rest
+            .strip_prefix('"')
+            .map(|r| quoted(r).0)
+            .unwrap_or_default();
         let known = ERROR_PAGES.iter().any(|p| name.contains(p));
         let hit = match role {
             "RootWebArea" => known || http_5xx(&name),
@@ -371,7 +407,9 @@ pub fn error_page(tree: &str) -> Option<String> {
 /// The known texts already cover "502 Bad Gateway" and its kind.
 fn http_5xx(title: &str) -> bool {
     let w: Vec<&str> = title.split_whitespace().collect();
-    let code = w.iter().any(|t| t.parse::<u16>().is_ok_and(|c| (500..600).contains(&c)));
+    let code = w
+        .iter()
+        .any(|t| t.parse::<u16>().is_ok_and(|c| (500..600).contains(&c)));
     code && (w.len() == 1 || w.iter().any(|t| t.trim_matches(':') == "Error"))
 }
 
@@ -379,8 +417,15 @@ fn http_5xx(title: &str) -> bool {
 /// when the node is gone.
 pub fn node_value(tree: &str, id: i64) -> Option<String> {
     let head = format!("[{id}] ");
-    let l = tree.lines().map(str::trim_start).find(|l| l.starts_with(&head))?;
-    Some(l.split_once(" value=\"").map(|(_, r)| quoted(r).0).unwrap_or_default())
+    let l = tree
+        .lines()
+        .map(str::trim_start)
+        .find(|l| l.starts_with(&head))?;
+    Some(
+        l.split_once(" value=\"")
+            .map(|(_, r)| quoted(r).0)
+            .unwrap_or_default(),
+    )
 }
 
 /// Whether a field reads back as `want`: equal up to whitespace, a prefix
@@ -409,7 +454,12 @@ fn quoted(s: &str) -> (String, &str) {
                 Some((_, 'n')) => out.push('\n'),
                 Some((_, 't')) => out.push('\t'),
                 Some((_, 'u')) => {
-                    let hex: String = it.by_ref().map(|(_, h)| h).take_while(|h| *h != '}').filter(|h| *h != '{').collect();
+                    let hex: String = it
+                        .by_ref()
+                        .map(|(_, h)| h)
+                        .take_while(|h| *h != '}')
+                        .filter(|h| *h != '{')
+                        .collect();
                     out.extend(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32));
                 }
                 Some((_, c)) => out.push(c),
@@ -470,14 +520,22 @@ impl Run<'_> {
                 return out;
             }
         };
-        trace(StepTrace { step: 0, observe_ms: ms(first), step_ms: ms(first), ..StepTrace::default() });
+        trace(StepTrace {
+            step: 0,
+            observe_ms: ms(first),
+            step_ms: ms(first),
+            ..StepTrace::default()
+        });
         turns.push((String::new(), obs));
         let mut phase: Option<String> = None;
         let mut slot: Option<OwnedSemaphorePermit> = None;
         for step in 1..=self.step_cap {
             out.steps = step;
             let t0 = Instant::now();
-            let mut st = StepTrace { step, ..StepTrace::default() };
+            let mut st = StepTrace {
+                step,
+                ..StepTrace::default()
+            };
             let r = self.step(&mut st, &mut turns, &mut phase, &mut slot).await;
             st.step_ms = ms(t0);
             out.reloads += st.reloads;
@@ -520,10 +578,16 @@ impl Run<'_> {
     ) -> StepEnd {
         let fail = |st: &mut StepTrace, e: String, note: Option<String>| {
             st.error = Some(e.clone());
-            StepEnd { end: Some(Err(e)), note }
+            StepEnd {
+                end: Some(Err(e)),
+                note,
+            }
         };
         let messages = prompt(self.system, &self.task, turns, self.history_full);
-        st.prompt_bytes = messages.iter().map(|m| m["content"].as_str().map_or(0, str::len)).sum();
+        st.prompt_bytes = messages
+            .iter()
+            .map(|m| m["content"].as_str().map_or(0, str::len))
+            .sum();
         let tm = Instant::now();
         let reply = self.model.complete(&messages, self.schema).await;
         st.model_ms = ms(tm);
@@ -549,7 +613,10 @@ impl Run<'_> {
                 st.error = Some(e.clone());
                 let last = turns.last().map(|t| t.1.clone()).unwrap_or_default();
                 turns.push((c.text, format!("Your reply was rejected: {e}\n\n{last}")));
-                return StepEnd { end: None, note: None };
+                return StepEnd {
+                    end: None,
+                    note: None,
+                };
             }
         };
         let note = Some(plan.note.clone());
@@ -592,20 +659,33 @@ impl Run<'_> {
         // Done is a claim about a page the model has seen, so a reply that
         // still acts is not done: show it what its actions did first.
         if plan.done && plan.actions.is_empty() {
-            return StepEnd { end: Some(Ok(())), note };
+            return StepEnd {
+                end: Some(Ok(())),
+                note,
+            };
         }
         if plan.done {
-            results.push("- the loop did not accept done: a reply that sets done must have no actions. \
+            results.push(
+                "- the loop did not accept done: a reply that sets done must have no actions. \
 Check this page; if the task is complete, reply with no actions and done true."
-                .to_owned());
+                    .to_owned(),
+            );
         }
-        let mutated = plan.actions.iter().any(|a| MUTATING.contains(&a.tool.as_str()));
+        let mutated = plan
+            .actions
+            .iter()
+            .any(|a| MUTATING.contains(&a.tool.as_str()));
         let to = Instant::now();
         match self.observe_after(mutated, &results, st).await {
             Ok((obs, settle_ms)) => {
                 st.settle_ms = settle_ms;
                 st.observe_ms = round2(ms(to) - settle_ms);
-                st.page = obs.lines().find(|l| l.contains("RootWebArea")).unwrap_or("").trim().to_owned();
+                st.page = obs
+                    .lines()
+                    .find(|l| l.contains("RootWebArea"))
+                    .unwrap_or("")
+                    .trim()
+                    .to_owned();
                 turns.push((c.text, obs));
                 StepEnd { end: None, note }
             }
@@ -620,14 +700,19 @@ Check this page; if the task is complete, reply with no actions and done true."
             return Ok(0);
         };
         for n in 0..=RETYPES {
-            let r = self.desk.call("ax_tree", &json!({ "max_bytes": self.ax_max_bytes })).await?;
+            let r = self
+                .desk
+                .call("ax_tree", &json!({ "max_bytes": self.ax_max_bytes }))
+                .await?;
             let got = node_value(r.result["tree"].as_str().unwrap_or(""), id);
             // A node that is gone was replaced by the app; nothing to check.
             if got.as_deref().is_none_or(|g| reads_as(g, want)) || n == RETYPES {
                 return Ok(n);
             }
             self.desk.call("click", &json!({ "node_id": id })).await?;
-            self.desk.call("key", &json!({ "key": "Control+a" })).await?;
+            self.desk
+                .call("key", &json!({ "key": "Control+a" }))
+                .await?;
             self.desk.call("type", &json!({ "text": want })).await?;
         }
         Ok(RETYPES)
@@ -644,12 +729,20 @@ Check this page; if the task is complete, reply with no actions and done true."
     ) -> Result<(String, f64), String> {
         let t = Instant::now();
         if mutated {
-            self.desk.call("wait_settled", &json!({ "quiet_ms": 300, "timeout_ms": 5000 })).await?;
+            self.desk
+                .call(
+                    "wait_settled",
+                    &json!({ "quiet_ms": 300, "timeout_ms": 5000 }),
+                )
+                .await?;
         }
         let mut settle = ms(t);
         let (mut obs, _) = self.observe(results).await?;
         let mut notes = results.to_vec();
-        while let Some(why) = obs.split_once("Page:\n").and_then(|(_, tree)| error_page(tree)) {
+        while let Some(why) = obs
+            .split_once("Page:\n")
+            .and_then(|(_, tree)| error_page(tree))
+        {
             if st.reloads == RELOADS {
                 break;
             }
@@ -657,9 +750,17 @@ Check this page; if the task is complete, reply with no actions and done true."
             tokio::time::sleep(Duration::from_millis(500 << st.reloads)).await;
             st.reloads += 1;
             self.desk.call("reload", &json!({})).await?;
-            self.desk.call("wait_settled", &json!({ "quiet_ms": 300, "timeout_ms": 5000 })).await?;
+            self.desk
+                .call(
+                    "wait_settled",
+                    &json!({ "quiet_ms": 300, "timeout_ms": 5000 }),
+                )
+                .await?;
             settle += ms(t);
-            notes.push(format!("- the loop reloaded an error page ({why}), attempt {}", st.reloads));
+            notes.push(format!(
+                "- the loop reloaded an error page ({why}), attempt {}",
+                st.reloads
+            ));
             obs = self.observe(&notes).await?.0;
         }
         Ok((obs, round2(settle)))
@@ -667,7 +768,10 @@ Check this page; if the task is complete, reply with no actions and done true."
 
     async fn observe(&mut self, results: &[String]) -> Result<(String, f64), String> {
         let t = Instant::now();
-        let r = self.desk.call("ax_tree", &json!({ "max_bytes": self.ax_max_bytes })).await?;
+        let r = self
+            .desk
+            .call("ax_tree", &json!({ "max_bytes": self.ax_max_bytes }))
+            .await?;
         if !r.ok {
             return Err(format!("ax_tree: {}", r.error.unwrap_or_default()));
         }
@@ -689,7 +793,12 @@ Check this page; if the task is complete, reply with no actions and done true."
 
 fn result_line(a: &Action, r: &crate::desk::Reply) -> String {
     if !r.ok {
-        return format!("- {} {}: error: {}", a.tool, a.args, r.error.as_deref().unwrap_or("?"));
+        return format!(
+            "- {} {}: error: {}",
+            a.tool,
+            a.args,
+            r.error.as_deref().unwrap_or("?")
+        );
     }
     let res = match a.tool.as_str() {
         "download_list" | "navigate" | "wait_settled" => {
@@ -701,8 +810,15 @@ fn result_line(a: &Action, r: &crate::desk::Reply) -> String {
         }
         "read_pdf" => {
             let text = r.result["text"].as_str().unwrap_or("");
-            let cut = if r.result["truncated"] == true { " (cut short)" } else { "" };
-            format!("ok\n{PDF_OPEN} of {}{cut} ---\n{text}\n{PDF_CLOSE}", a.args["path"].as_str().unwrap_or("?"))
+            let cut = if r.result["truncated"] == true {
+                " (cut short)"
+            } else {
+                ""
+            };
+            format!(
+                "ok\n{PDF_OPEN} of {}{cut} ---\n{text}\n{PDF_CLOSE}",
+                a.args["path"].as_str().unwrap_or("?")
+            )
         }
         _ => "ok".to_owned(),
     };
@@ -716,7 +832,13 @@ mod tests {
     #[test]
     fn parses_the_first_object_and_ignores_fences() {
         let p = parse("```json\n{\"actions\":[{\"tool\":\"key\",\"args\":{\"key\":\"Enter\"}}],\"done\":false,\"note\":\"n\"}\n```").unwrap();
-        assert_eq!(p.actions, vec![Action { tool: "key".into(), args: json!({"key": "Enter"}) }]);
+        assert_eq!(
+            p.actions,
+            vec![Action {
+                tool: "key".into(),
+                args: json!({"key": "Enter"})
+            }]
+        );
         assert_eq!(p.note, "n");
         assert!(!p.done);
     }
@@ -724,7 +846,10 @@ mod tests {
     #[test]
     fn finds_error_pages_but_not_app_dialogs() {
         assert!(error_page("[1] RootWebArea \"502 Bad Gateway\"\n").is_some());
-        assert!(error_page("[1] RootWebArea \"Login\"\n  [2] heading \"Something went wrong\"\n").is_some());
+        assert!(
+            error_page("[1] RootWebArea \"Login\"\n  [2] heading \"Something went wrong\"\n")
+                .is_some()
+        );
         let dialog = "[1] RootWebArea \"PI-1 - Purchase Invoice\"\n  [2] dialog \"\"\n    [3] heading \"Server Error\"\n  [4] heading \"Details\"\n";
         assert_eq!(error_page(dialog), None);
         assert_eq!(error_page("[1] RootWebArea \"500 invoices\"\n"), None);
@@ -745,16 +870,38 @@ mod tests {
 
     #[test]
     fn phases_come_from_the_note_then_the_url() {
-        let ph = Phases::new(&BTreeMap::from([("erp".to_owned(), 2)]), "http://127.0.0.1:8080/");
+        let ph = Phases::new(
+            &BTreeMap::from([("erp".to_owned(), 2)]),
+            "http://127.0.0.1:8080/",
+        );
         let plan = |note: &str, url: Option<&str>| Plan {
-            actions: url.map(|u| Action { tool: "navigate".into(), args: json!({ "url": u }) }).into_iter().collect(),
+            actions: url
+                .map(|u| Action {
+                    tool: "navigate".into(),
+                    args: json!({ "url": u }),
+                })
+                .into_iter()
+                .collect(),
             done: false,
             note: note.into(),
         };
-        assert_eq!(ph.of(&plan("phase=erp_fill;n=2", None), None).as_deref(), Some("erp"));
-        assert_eq!(ph.of(&plan("phase=portal_open;n=0", None), Some("erp")), None);
-        assert_eq!(ph.of(&plan("", Some("http://127.0.0.1:8080/login")), None).as_deref(), Some("erp"));
-        assert_eq!(ph.of(&plan("", Some("http://127.0.0.1:9001/")), Some("erp")), None);
+        assert_eq!(
+            ph.of(&plan("phase=erp_fill;n=2", None), None).as_deref(),
+            Some("erp")
+        );
+        assert_eq!(
+            ph.of(&plan("phase=portal_open;n=0", None), Some("erp")),
+            None
+        );
+        assert_eq!(
+            ph.of(&plan("", Some("http://127.0.0.1:8080/login")), None)
+                .as_deref(),
+            Some("erp")
+        );
+        assert_eq!(
+            ph.of(&plan("", Some("http://127.0.0.1:9001/")), Some("erp")),
+            None
+        );
         assert_eq!(ph.of(&plan("", None), Some("erp")).as_deref(), Some("erp"));
     }
 
@@ -765,7 +912,9 @@ mod tests {
 
     #[test]
     fn keeps_pdf_text_when_shortening() {
-        let obs = format!("Results:\n- read_pdf {{}}: ok\n{PDF_OPEN} of a.pdf ---\nTotal 9.00\n{PDF_CLOSE}\n\nPage:\n[1] RootWebArea \"P\"\n[2] button \"x\"");
+        let obs = format!(
+            "Results:\n- read_pdf {{}}: ok\n{PDF_OPEN} of a.pdf ---\nTotal 9.00\n{PDF_CLOSE}\n\nPage:\n[1] RootWebArea \"P\"\n[2] button \"x\""
+        );
         let s = summary(&obs);
         assert!(s.contains("Total 9.00") && s.ends_with(PDF_CLOSE) && !s.contains("button"));
     }
@@ -773,10 +922,19 @@ mod tests {
     #[test]
     fn shortens_old_observations() {
         let turns: Vec<(String, String)> = (0..5)
-            .map(|i| (format!("a{i}"), format!("Page:\n[1] RootWebArea \"P{i}\"\n[2] button \"x\"")))
+            .map(|i| {
+                (
+                    format!("a{i}"),
+                    format!("Page:\n[1] RootWebArea \"P{i}\"\n[2] button \"x\""),
+                )
+            })
             .collect();
         let m = prompt("S", "T", &turns, 3);
-        let users: Vec<&str> = m.iter().filter(|x| x["role"] == "user").filter_map(|x| x["content"].as_str()).collect();
+        let users: Vec<&str> = m
+            .iter()
+            .filter(|x| x["role"] == "user")
+            .filter_map(|x| x["content"].as_str())
+            .collect();
         assert_eq!(users[0], "T");
         assert!(users[1].starts_with("(earlier observation, shortened) [1] RootWebArea \"P0\""));
         assert!(users[5].contains("button"));

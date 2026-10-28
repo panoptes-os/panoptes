@@ -200,7 +200,10 @@ impl Desk {
         let events = browser.events();
         let session = browser.attach(&page).await.map_err(|e| e.to_string())?;
         session.enable().await.map_err(|e| e.to_string())?;
-        browser.discover_targets().await.map_err(|e| e.to_string())?;
+        browser
+            .discover_targets()
+            .await
+            .map_err(|e| e.to_string())?;
         browser
             .set_download_dir(&downloads.display().to_string())
             .await
@@ -247,13 +250,19 @@ impl Desk {
     /// renamed).
     pub fn set_thumb(&self, path: PathBuf, every: Duration) {
         if let Ok(mut t) = self.thumb.lock() {
-            *t = Some(Thumb { path, every, last: None });
+            *t = Some(Thumb {
+                path,
+                every,
+                last: None,
+            });
         }
     }
 
     async fn thumb_if_due(&self) {
         let path = {
-            let Ok(mut guard) = self.thumb.lock() else { return };
+            let Ok(mut guard) = self.thumb.lock() else {
+                return;
+            };
             let Some(t) = guard.as_mut() else { return };
             if t.last.is_some_and(|l| l.elapsed() < t.every) {
                 return;
@@ -263,7 +272,9 @@ impl Desk {
         };
         let _turn = self.busy.lock().await;
         let page = self.page();
-        let Ok(vp) = page.viewport().await else { return };
+        let Ok(vp) = page.viewport().await else {
+            return;
+        };
         let Ok(data) = page.screenshot(vp, ImageFormat::Jpeg, 50, 0.1).await else {
             return;
         };
@@ -289,7 +300,10 @@ impl Desk {
                 let scale = arg_f64(args, "scale").unwrap_or(1.0).clamp(0.1, 1.0);
                 let vp = page.viewport().await.map_err(e)?;
                 let cap = Instant::now();
-                let data = page.screenshot(vp, format, quality, scale).await.map_err(e)?;
+                let data = page
+                    .screenshot(vp, format, quality, scale)
+                    .await
+                    .map_err(e)?;
                 let capture_ms = ms(cap.elapsed());
                 Ok(Output {
                     result: json!({
@@ -327,7 +341,10 @@ impl Desk {
                         .await
                         .map_err(e)?;
                 }
-                Ok(Output::json(json!({ "x": x.round(), "y": y.round() }), start))
+                Ok(Output::json(
+                    json!({ "x": x.round(), "y": y.round() }),
+                    start,
+                ))
             }
             "type" => {
                 let text = args
@@ -339,10 +356,16 @@ impl Desk {
                     page.focus(node).await.map_err(e)?;
                 }
                 page.insert_text(text).await.map_err(e)?;
-                Ok(Output::json(json!({ "chars": text.chars().count() }), start))
+                Ok(Output::json(
+                    json!({ "chars": text.chars().count() }),
+                    start,
+                ))
             }
             "key" => {
-                let spec = args.get("key").and_then(Value::as_str).ok_or("key needs key")?;
+                let spec = args
+                    .get("key")
+                    .and_then(Value::as_str)
+                    .ok_or("key needs key")?;
                 let [down, up] = keys::press(spec)?;
                 page.key_event(down).await.map_err(e)?;
                 page.key_event(up).await.map_err(e)?;
@@ -360,7 +383,10 @@ impl Desk {
                 Ok(Output::json(json!({ "dx": dx, "dy": dy }), start))
             }
             "navigate" => {
-                let url = args.get("url").and_then(Value::as_str).ok_or("navigate needs url")?;
+                let url = args
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .ok_or("navigate needs url")?;
                 let timeout = Duration::from_millis(arg_u64(args, "timeout_ms", 15_000));
                 let loader = match page.navigate(url).await.map_err(e)? {
                     Ok(l) => l,
@@ -410,22 +436,33 @@ impl Desk {
                 ))
             }
             "upload" => {
-                let path = args.get("path").and_then(Value::as_str).ok_or("upload needs path")?;
+                let path = args
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .ok_or("upload needs path")?;
                 let file = self.download_path(path)?;
                 let target = match args.get("node_id").and_then(Value::as_i64) {
                     Some(node) => FileInput::Node(node),
                     None => FileInput::Selector(
-                        args.get("selector").and_then(Value::as_str).unwrap_or("input[type=file]"),
+                        args.get("selector")
+                            .and_then(Value::as_str)
+                            .unwrap_or("input[type=file]"),
                     ),
                 };
-                page.set_file_input(target, std::slice::from_ref(&file)).await.map_err(e)?;
+                page.set_file_input(target, std::slice::from_ref(&file))
+                    .await
+                    .map_err(e)?;
                 Ok(Output::json(json!({ "file": file }), start))
             }
             "read_pdf" => {
-                let path = args.get("path").and_then(Value::as_str).ok_or("read_pdf needs path")?;
+                let path = args
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .ok_or("read_pdf needs path")?;
                 let file = self.download_path(path)?;
                 let max = arg_u64(args, "max_bytes", 8000) as usize;
-                let bin = std::env::var("PANOPTES_PDFTOTEXT").unwrap_or_else(|_| "pdftotext".into());
+                let bin =
+                    std::env::var("PANOPTES_PDFTOTEXT").unwrap_or_else(|_| "pdftotext".into());
                 let run = tokio::process::Command::new(&bin)
                     .args(["-layout", &file, "-"])
                     .kill_on_drop(true)
@@ -452,7 +489,11 @@ impl Desk {
                 let timeout = Duration::from_millis(arg_u64(args, "timeout_ms", 15_000));
                 // Page.reload returns no loader id: wait for a loader other
                 // than the current one to reach load.
-                let old = self.state.lock().map(|s| s.loader.clone()).unwrap_or_default();
+                let old = self
+                    .state
+                    .lock()
+                    .map(|s| s.loader.clone())
+                    .unwrap_or_default();
                 page.reload().await.map_err(e)?;
                 let deadline = Instant::now() + timeout;
                 let mut loaded = false;
@@ -476,8 +517,14 @@ impl Desk {
     /// `p` resolved inside the download directory; anything that escapes it
     /// (`..`, absolute paths, symlinks out) is refused.
     fn download_path(&self, p: &str) -> Result<String, String> {
-        let root = self.downloads.canonicalize().map_err(|err| format!("download dir: {err}"))?;
-        let file = root.join(p).canonicalize().map_err(|err| format!("{p}: {err}"))?;
+        let root = self
+            .downloads
+            .canonicalize()
+            .map_err(|err| format!("download dir: {err}"))?;
+        let file = root
+            .join(p)
+            .canonicalize()
+            .map_err(|err| format!("{p}: {err}"))?;
         if !file.starts_with(&root) || !file.is_file() {
             return Err(format!("{p} is not a file in {}", root.display()));
         }
@@ -611,7 +658,10 @@ async fn track(desk: std::sync::Weak<Desk>, mut events: tokio::sync::broadcast::
             }
             "Browser.downloadWillBegin" | "Browser.downloadProgress" => {
                 if let (Some(guid), Ok(mut st)) = (p["guid"].as_str(), desk.state.lock()) {
-                    let entry = st.downloads.entry(guid.to_owned()).or_insert_with(|| json!({}));
+                    let entry = st
+                        .downloads
+                        .entry(guid.to_owned())
+                        .or_insert_with(|| json!({}));
                     for (k, v) in p.as_object().into_iter().flatten() {
                         entry[k] = v.clone();
                     }
@@ -636,7 +686,8 @@ async fn track(desk: std::sync::Weak<Desk>, mut events: tokio::sync::broadcast::
                 if let (Some(id), Ok(mut st)) = (p["requestId"].as_str(), desk.state.lock()) {
                     let url = p["request"]["url"].as_str().unwrap_or_default();
                     let loader = p["loaderId"].as_str().unwrap_or_default().to_owned();
-                    st.inflight.insert(id.to_owned(), (Instant::now(), loader, clip_url(url)));
+                    st.inflight
+                        .insert(id.to_owned(), (Instant::now(), loader, clip_url(url)));
                 }
             }
             "Network.loadingFinished" | "Network.loadingFailed" => {

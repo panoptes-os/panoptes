@@ -93,7 +93,12 @@ fn spawn_hog(cg: &Cgroup, mib: u64) -> panoptes_cgroup::Child {
     let exe = std::env::current_exe().unwrap();
     let child = cg
         .spawn(
-            &[exe.as_os_str(), "--ignored".as_ref(), "--exact".as_ref(), "hog_helper".as_ref()],
+            &[
+                exe.as_os_str(),
+                "--ignored".as_ref(),
+                "--exact".as_ref(),
+                "hog_helper".as_ref(),
+            ],
             &[("PANOPTES_HOG_MIB", &mib.to_string())],
         )
         .expect("spawn hog");
@@ -128,7 +133,9 @@ fn spawn_charges_the_child_from_the_start() {
 #[ignore = "needs root in a delegated cgroup; see tests/run-root.sh"]
 fn freeze_stops_cpu_and_thaw_resumes_it() {
     let cg = TestGroup::new("t-freeze");
-    let child = cg.spawn(&["sh", "-c", "exec yes > /dev/null"], &[]).unwrap();
+    let child = cg
+        .spawn(&["sh", "-c", "exec yes > /dev/null"], &[])
+        .unwrap();
     assert!(eventually(SEC, || cg.cpu_usage_us().unwrap() > 10_000));
 
     let froze = cg.freeze(5 * SEC).unwrap();
@@ -148,7 +155,10 @@ fn freeze_stops_cpu_and_thaw_resumes_it() {
          thaw: {thawed:?}, {thawed_cpu} µs CPU in 300 ms after"
     );
     assert!(frozen_cpu < 1_000, "frozen group used {frozen_cpu} µs");
-    assert!(thawed_cpu > 100_000, "thawed group used only {thawed_cpu} µs");
+    assert!(
+        thawed_cpu > 100_000,
+        "thawed group used only {thawed_cpu} µs"
+    );
     drop(child);
 }
 
@@ -179,10 +189,17 @@ fn reclaim_parks_a_frozen_group_in_zswap() {
         parked.get("zswapped").unwrap_or(0) / MIB,
         parked.get("zswpwb").unwrap_or(0),
     );
-    assert!(after < before / 2, "charge only fell from {before} to {after}");
+    assert!(
+        after < before / 2,
+        "charge only fell from {before} to {after}"
+    );
     assert!(parked.get("zswapped").unwrap_or(0) > 100 * MIB);
     assert_eq!(parked.get("zswpwb").unwrap_or(0), 0, "writeback was off");
-    assert_eq!(cg.procs().unwrap(), vec![hog.pid()], "hog survived the park");
+    assert_eq!(
+        cg.procs().unwrap(),
+        vec![hog.pid()],
+        "hog survived the park"
+    );
     assert!(matches!(outcome, Reclaim::Full | Reclaim::Partial));
     drop(hog);
 }
@@ -197,6 +214,9 @@ fn weights_and_pressure_round_trip() {
     let mem = cg.memory_pressure().unwrap();
     let cpu = cg.cpu_pressure().unwrap();
     assert!(mem.full.is_some());
-    eprintln!("pressure: memory some total {} µs, cpu some total {} µs", mem.some.total_us, cpu.some.total_us);
+    eprintln!(
+        "pressure: memory some total {} µs, cpu some total {} µs",
+        mem.some.total_us, cpu.some.total_us
+    );
     assert!(base().controllers().unwrap().iter().any(|c| c == "memory"));
 }

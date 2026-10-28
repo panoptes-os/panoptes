@@ -122,7 +122,10 @@ pub struct App {
 
 /// `pdesk-loop-7.service` is loop agent 7.
 fn loop_index(name: &str) -> Option<usize> {
-    name.strip_prefix("pdesk-loop-")?.strip_suffix(".service")?.parse().ok()
+    name.strip_prefix("pdesk-loop-")?
+        .strip_suffix(".service")?
+        .parse()
+        .ok()
 }
 
 fn short(name: &str) -> String {
@@ -155,7 +158,8 @@ impl App {
     fn slot(&mut self, i: usize) -> &mut Agent {
         while self.agents.len() <= i {
             let n = self.agents.len();
-            self.agents.push(Agent::new(format!("pdesk-loop-{n}.service")));
+            self.agents
+                .push(Agent::new(format!("pdesk-loop-{n}.service")));
         }
         &mut self.agents[i]
     }
@@ -212,7 +216,10 @@ impl App {
         for e in events {
             let who = short(e["agent"].as_str().unwrap_or("?"));
             let ms = e["ms"].as_f64().unwrap_or(0.0);
-            let (from, to) = (e["from"].as_str().unwrap_or(""), e["to"].as_str().unwrap_or(""));
+            let (from, to) = (
+                e["from"].as_str().unwrap_or(""),
+                e["to"].as_str().unwrap_or(""),
+            );
             match (from, to) {
                 (_, "parked") => {
                     let b = e["before"].as_u64().unwrap_or(0) >> 20;
@@ -229,7 +236,9 @@ impl App {
         }
         // Steps.
         for t in &f.trace {
-            let Some(i) = t["agent"].as_u64().map(|i| i as usize) else { continue };
+            let Some(i) = t["agent"].as_u64().map(|i| i as usize) else {
+                continue;
+            };
             let a = self.slot(i);
             if a.kind == Kind::Queued {
                 a.kind = Kind::Starting;
@@ -252,7 +261,9 @@ impl App {
         // Outcomes, as each agent finishes.
         if let Some(results) = &f.results {
             for r in results.clone() {
-                let Some(i) = r["agent"].as_u64().map(|i| i as usize) else { continue };
+                let Some(i) = r["agent"].as_u64().map(|i| i as usize) else {
+                    continue;
+                };
                 // The loop's REST check when it ran; else the agent's claim.
                 let done = r["verified"].as_bool().unwrap_or(r["done"] == true);
                 let inv = r["invoice"].as_str().unwrap_or("?").to_owned();
@@ -272,7 +283,12 @@ impl App {
         for (i, b) in &f.thumbs {
             self.slot(*i).thumb_b64 = Some(b.clone());
         }
-        self.frame = Frame { trace: Vec::new(), thumbs: Vec::new(), results: None, ..f };
+        self.frame = Frame {
+            trace: Vec::new(),
+            thumbs: Vec::new(),
+            results: None,
+            ..f
+        };
         if self.selected >= self.agents.len() {
             self.selected = self.agents.len().saturating_sub(1);
         }
@@ -294,7 +310,9 @@ impl App {
         let key = b64.len() ^ b64.as_bytes().get(b64.len() / 2).copied().unwrap_or(0) as usize;
         let fresh = !matches!(&self.thumb_cache, Some((ci, ck, _)) if *ci == i && *ck == key);
         if fresh {
-            let bytes = base64::engine::general_purpose::STANDARD.decode(b64.trim()).ok()?;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b64.trim())
+                .ok()?;
             let mut d = jpeg_decoder::Decoder::new(&bytes[..]);
             let px = d.decode().ok()?;
             let info = d.info()?;

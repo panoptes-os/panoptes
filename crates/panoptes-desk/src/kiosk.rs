@@ -151,7 +151,11 @@ pub async fn launch(kiosk_cg: Cgroup, cfg: &Config) -> Result<Kiosk, String> {
         CdpMode::Pipe => {
             let (cdp, ends) = Cdp::pipe().map_err(|e| e.to_string())?;
             let child = kiosk_cg
-                .spawn_with_fds(&argv, &env, &[(ends.read.as_fd(), 3), (ends.write.as_fd(), 4)])
+                .spawn_with_fds(
+                    &argv,
+                    &env,
+                    &[(ends.read.as_fd(), 3), (ends.write.as_fd(), 4)],
+                )
                 .map_err(|e| format!("spawn cage: {e}"))?;
             drop(ends);
             (cdp, child)
@@ -166,8 +170,14 @@ pub async fn launch(kiosk_cg: Cgroup, cfg: &Config) -> Result<Kiosk, String> {
             (cdp, child)
         }
     };
-    let product = cdp.version().await.map_err(|e| format!("browser never answered: {e}"))?;
-    eprintln!("panoptes-desk: {product} up in {}", kiosk_cg.path().display());
+    let product = cdp
+        .version()
+        .await
+        .map_err(|e| format!("browser never answered: {e}"))?;
+    eprintln!(
+        "panoptes-desk: {product} up in {}",
+        kiosk_cg.path().display()
+    );
     Ok(Kiosk {
         cdp,
         cgroup: kiosk_cg,

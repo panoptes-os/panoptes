@@ -34,13 +34,17 @@ impl Erp {
             .get_all(reqwest::header::SET_COOKIE)
             .iter()
             .filter_map(|v| v.to_str().ok())
-            .find_map(|c| c.strip_prefix("sid=").map(|r| r.split(';').next().unwrap_or("").to_owned()))
+            .find_map(|c| {
+                c.strip_prefix("sid=")
+                    .map(|r| r.split(';').next().unwrap_or("").to_owned())
+            })
             .ok_or("erp login: no sid cookie")?;
         Ok(Erp { http, base, sid })
     }
 
     async fn get(&self, path: &str, query: &[(&str, String)]) -> Result<Value, String> {
-        let mut url = reqwest::Url::parse(&format!("{}{path}", self.base)).map_err(|e| e.to_string())?;
+        let mut url =
+            reqwest::Url::parse(&format!("{}{path}", self.base)).map_err(|e| e.to_string())?;
         for (k, v) in query {
             url.query_pairs_mut().append_pair(k, v);
         }
@@ -62,37 +66,79 @@ impl Erp {
     pub async fn check(&self, truth: &Value) -> Value {
         match self.check_inner(truth).await {
             Ok(v) => v,
-            Err(e) => json!({ "verified": false, "attached": false, "failed": ["query"], "verify_error": e }),
+            Err(e) => {
+                json!({ "verified": false, "attached": false, "failed": ["query"], "verify_error": e })
+            }
         }
     }
 
     async fn check_inner(&self, t: &Value) -> Result<Value, String> {
-        let filters = json!([["supplier", "=", t["supplier"]], ["bill_no", "=", t["invoice_no"]], ["docstatus", "=", 1]]);
+        let filters = json!([
+            ["supplier", "=", t["supplier"]],
+            ["bill_no", "=", t["invoice_no"]],
+            ["docstatus", "=", 1]
+        ]);
         let list = self
             .get(
                 "/api/resource/Purchase%20Invoice",
-                &[("filters", filters.to_string()), ("fields", r#"["name"]"#.into()), ("limit_page_length", "0".into())],
+                &[
+                    ("filters", filters.to_string()),
+                    ("fields", r#"["name"]"#.into()),
+                    ("limit_page_length", "0".into()),
+                ],
             )
             .await?;
-        let names: Vec<&str> = list["data"].as_array().into_iter().flatten().filter_map(|d| d["name"].as_str()).collect();
+        let names: Vec<&str> = list["data"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|d| d["name"].as_str())
+            .collect();
         let Some(name) = names.first() else {
             return Ok(json!({ "verified": false, "attached": false, "failed": ["submitted"] }));
         };
-        let doc = self.get(&format!("/api/resource/Purchase%20Invoice/{}", enc(name)), &[]).await?;
-        let failed = mismatches(&doc["data"], t);
-        let files = json!([["attached_to_doctype", "=", "Purchase Invoice"], ["attached_to_name", "=", name]]);
-        let files = self
-            .get("/api/resource/File", &[("filters", files.to_string()), ("fields", r#"["file_name"]"#.into())])
+        let doc = self
+            .get(
+                &format!("/api/resource/Purchase%20Invoice/{}", enc(name)),
+                &[],
+            )
             .await?;
-        let attached: Vec<&str> = files["data"].as_array().into_iter().flatten().filter_map(|f| f["file_name"].as_str()).collect();
-        Ok(json!({ "verified": failed.is_empty(), "attached": !attached.is_empty(), "pi": name,
-                   "submitted_count": names.len(), "files": attached, "failed": failed }))
+        let failed = mismatches(&doc["data"], t);
+        let files = json!([
+            ["attached_to_doctype", "=", "Purchase Invoice"],
+            ["attached_to_name", "=", name]
+        ]);
+        let files = self
+            .get(
+                "/api/resource/File",
+                &[
+                    ("filters", files.to_string()),
+                    ("fields", r#"["file_name"]"#.into()),
+                ],
+            )
+            .await?;
+        let attached: Vec<&str> = files["data"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|f| f["file_name"].as_str())
+            .collect();
+        Ok(
+            json!({ "verified": failed.is_empty(), "attached": !attached.is_empty(), "pi": name,
+                   "submitted_count": names.len(), "files": attached, "failed": failed }),
+        )
     }
 }
 
 fn enc(s: &str) -> String {
     s.bytes()
-        .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
         .collect()
 }
 
@@ -110,7 +156,12 @@ pub fn mismatches(doc: &Value, t: &Value) -> Vec<&'static str> {
             .flatten()
             .map(|i| {
                 let n = |k: &str, s: f64| (i[k].as_f64().unwrap_or(f64::NAN) * s).round();
-                format!("{}|{}|{}", i["item_code"].as_str().unwrap_or(""), n("qty", 1000.0), n("rate", 100.0))
+                format!(
+                    "{}|{}|{}",
+                    i["item_code"].as_str().unwrap_or(""),
+                    n("qty", 1000.0),
+                    n("rate", 100.0)
+                )
             })
             .collect();
         l.sort();

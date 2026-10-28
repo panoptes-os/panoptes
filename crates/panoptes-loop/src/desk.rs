@@ -39,7 +39,11 @@ async fn run(cmd: &[String]) -> Result<(), String> {
         .status()
         .await
         .map_err(|e| format!("{prog}: {e}"))?;
-    if st.success() { Ok(()) } else { Err(format!("{prog} exited with {st}")) }
+    if st.success() {
+        Ok(())
+    } else {
+        Err(format!("{prog} exited with {st}"))
+    }
 }
 
 impl Desk {
@@ -63,7 +67,12 @@ impl Desk {
             }
         };
         let (read, write) = stream.into_split();
-        Ok(Desk { read: BufReader::new(read), write, next_id: 1, stop })
+        Ok(Desk {
+            read: BufReader::new(read),
+            write,
+            next_id: 1,
+            stop,
+        })
     }
 
     pub async fn call(&mut self, tool: &str, args: &Value) -> Result<Reply, String> {
@@ -71,9 +80,18 @@ impl Desk {
         self.next_id += 1;
         let mut line = json!({ "id": id, "tool": tool, "args": args }).to_string();
         line.push('\n');
-        self.write.write_all(line.as_bytes()).await.map_err(|e| format!("desk write: {e}"))?;
+        self.write
+            .write_all(line.as_bytes())
+            .await
+            .map_err(|e| format!("desk write: {e}"))?;
         let mut buf = String::new();
-        if self.read.read_line(&mut buf).await.map_err(|e| format!("desk read: {e}"))? == 0 {
+        if self
+            .read
+            .read_line(&mut buf)
+            .await
+            .map_err(|e| format!("desk read: {e}"))?
+            == 0
+        {
             return Err("desk closed its socket".into());
         }
         let mut v: Value = serde_json::from_str(&buf).map_err(|e| format!("desk reply: {e}"))?;

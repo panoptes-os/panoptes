@@ -55,8 +55,12 @@ pub fn parse(text: &str) -> Vec<Node> {
     for line in text.lines() {
         let l = line.trim_start();
         let depth = (line.len() - l.len()) / 2;
-        let Some(rest) = l.strip_prefix('[') else { continue };
-        let Some((id, rest)) = rest.split_once("] ") else { continue };
+        let Some(rest) = l.strip_prefix('[') else {
+            continue;
+        };
+        let Some((id, rest)) = rest.split_once("] ") else {
+            continue;
+        };
         let (role, mut rest) = rest.split_once(' ').unwrap_or((rest, ""));
         let mut name = String::new();
         let mut value = String::new();
@@ -66,7 +70,13 @@ pub fn parse(text: &str) -> Vec<Node> {
         if let Some(r) = rest.trim_start().strip_prefix("value=\"") {
             (value, _) = quoted(r);
         }
-        nodes.push(Node { id: id.parse().ok(), role: role.to_owned(), name, value, depth });
+        nodes.push(Node {
+            id: id.parse().ok(),
+            role: role.to_owned(),
+            name,
+            value,
+            depth,
+        });
     }
     nodes
 }
@@ -96,6 +106,9 @@ mod tests {
         assert_eq!((n[1].id, n[1].value.as_str()), (Some(2), "INV-1"));
         assert_eq!((n[2].id, n[2].depth), (None, 1));
         assert_eq!((n[3].role.as_str(), n[3].name.as_str()), ("checkbox", ""));
-        assert_eq!(find(&n, "textbox", "Supplier Invoice No").map(|x| x.0), Some(1));
+        assert_eq!(
+            find(&n, "textbox", "Supplier Invoice No").map(|x| x.0),
+            Some(1)
+        );
     }
 }

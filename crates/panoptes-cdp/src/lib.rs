@@ -222,7 +222,12 @@ impl Cdp {
             return;
         };
         if let Some(id) = v.get("id").and_then(Value::as_u64) {
-            let tx = self.inner.pending.lock().ok().and_then(|mut p| p.remove(&id));
+            let tx = self
+                .inner
+                .pending
+                .lock()
+                .ok()
+                .and_then(|mut p| p.remove(&id));
             if let Some(tx) = tx {
                 let reply = match v.get("error") {
                     Some(e) => Err((
@@ -240,7 +245,10 @@ impl Cdp {
         }
         if let Some(method) = v.get("method").and_then(Value::as_str) {
             let _ = self.inner.events.send(Event {
-                session: v.get("sessionId").and_then(Value::as_str).map(str::to_owned),
+                session: v
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
                 method: method.to_owned(),
                 params: v.get("params").cloned().unwrap_or(Value::Null),
             });
@@ -336,9 +344,8 @@ async fn browser_ws_url(port: u16) -> Result<String> {
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
         .map_or(0, |i| i + 4);
-    let v: Value = serde_json::from_slice(&body[start..]).map_err(|e| {
-        Error::WebSocket(format!("/json/version: {e}"))
-    })?;
+    let v: Value = serde_json::from_slice(&body[start..])
+        .map_err(|e| Error::WebSocket(format!("/json/version: {e}")))?;
     v.get("webSocketDebuggerUrl")
         .and_then(Value::as_str)
         .map(str::to_owned)
@@ -358,15 +365,21 @@ mod tests {
         let cdp = Cdp::new(tx);
         let mut ev = cdp.events();
         let c = cdp.clone();
-        let call = tokio::spawn(async move { c.call(Some("S1"), "Page.navigate", json!({})).await });
+        let call =
+            tokio::spawn(async move { c.call(Some("S1"), "Page.navigate", json!({})).await });
         let sent: Value = serde_json::from_str(&rx.recv().await.unwrap()).unwrap();
         assert_eq!(sent["sessionId"], "S1");
         let id = sent["id"].as_u64().unwrap();
-        cdp.dispatch(br#"{"method":"Page.loadEventFired","sessionId":"S1","params":{"timestamp":1}}"#);
+        cdp.dispatch(
+            br#"{"method":"Page.loadEventFired","sessionId":"S1","params":{"timestamp":1}}"#,
+        );
         cdp.dispatch(format!(r#"{{"id":{id},"result":{{"frameId":"F"}}}}"#).as_bytes());
         assert_eq!(call.await.unwrap().unwrap()["frameId"], "F");
         let e = ev.recv().await.unwrap();
-        assert_eq!((e.method.as_str(), e.session.as_deref()), ("Page.loadEventFired", Some("S1")));
+        assert_eq!(
+            (e.method.as_str(), e.session.as_deref()),
+            ("Page.loadEventFired", Some("S1"))
+        );
     }
 
     #[tokio::test]

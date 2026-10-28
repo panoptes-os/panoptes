@@ -99,7 +99,9 @@ fn main() {
         if !event::poll(wait)? {
             continue;
         }
-        let Event::Key(k) = event::read()? else { continue };
+        let Event::Key(k) = event::read()? else {
+            continue;
+        };
         if k.kind != KeyEventKind::Press {
             continue;
         }

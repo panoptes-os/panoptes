@@ -186,7 +186,10 @@ fn save_state(path: &Path, agents: &BTreeMap<String, policy::Agent>) {
         .collect();
     let tmp = path.with_extension("tmp");
     let body = Value::Object(map).to_string();
-    if std::fs::write(&tmp, body).and_then(|()| std::fs::rename(&tmp, path)).is_err() {
+    if std::fs::write(&tmp, body)
+        .and_then(|()| std::fs::rename(&tmp, path))
+        .is_err()
+    {
         eprintln!("panoptes-resd: cannot write {}", path.display());
     }
 }
@@ -220,13 +223,19 @@ async fn apply(sh: &Arc<Shared>, agent: &str, actions: Vec<Action>) -> Result<f6
         for act in actions {
             match act {
                 Action::Thaw(_) => {
-                    kiosk.thaw(FREEZE_TIMEOUT).map_err(|e| format!("thaw: {e}"))?;
+                    kiosk
+                        .thaw(FREEZE_TIMEOUT)
+                        .map_err(|e| format!("thaw: {e}"))?;
                 }
                 Action::Freeze(_) => {
-                    kiosk.freeze(FREEZE_TIMEOUT).map_err(|e| format!("freeze: {e}"))?;
+                    kiosk
+                        .freeze(FREEZE_TIMEOUT)
+                        .map_err(|e| format!("freeze: {e}"))?;
                 }
                 Action::Weight(_, w) => {
-                    kiosk.set_cpu_weight(w).map_err(|e| format!("cpu.weight: {e}"))?;
+                    kiosk
+                        .set_cpu_weight(w)
+                        .map_err(|e| format!("cpu.weight: {e}"))?;
                 }
                 Action::Park(_) => park(&sh2, &name, &kiosk)?,
                 Action::Evict(_) => {
@@ -244,7 +253,10 @@ async fn apply(sh: &Arc<Shared>, agent: &str, actions: Vec<Action>) -> Result<f6
         eprintln!("panoptes-resd: {agent}: {e}");
         if let Ok(ev) = sh.kiosk(agent).and_then(|k| k.events()) {
             let now = sh.now();
-            sh.policy.lock().expect("policy").observed(agent, ev.frozen, now);
+            sh.policy
+                .lock()
+                .expect("policy")
+                .observed(agent, ev.frozen, now);
         }
     }
     r
@@ -261,7 +273,10 @@ fn park(sh: &Shared, agent: &str, kiosk: &Cgroup) -> Result<(), String> {
         .map_err(|e| format!("memory.zswap.writeback: {e}"))?;
     let before = kiosk.memory_current().map_err(|e| e.to_string())?;
     let start = Instant::now();
-    let full = match kiosk.reclaim(before).map_err(|e| format!("memory.reclaim: {e}"))? {
+    let full = match kiosk
+        .reclaim(before)
+        .map_err(|e| format!("memory.reclaim: {e}"))?
+    {
         Reclaim::Full => true,
         Reclaim::Partial => false,
     };
@@ -278,8 +293,17 @@ fn park(sh: &Shared, agent: &str, kiosk: &Cgroup) -> Result<(), String> {
         after >> 20,
         stat.ms
     );
-    sh.parks.lock().expect("parks").insert(agent.to_owned(), stat);
-    sh.note(agent, "waiting", "parked", stat.ms, json!({ "before": before, "after": after }));
+    sh.parks
+        .lock()
+        .expect("parks")
+        .insert(agent.to_owned(), stat);
+    sh.note(
+        agent,
+        "waiting",
+        "parked",
+        stat.ms,
+        json!({ "before": before, "after": after }),
+    );
     Ok(())
 }
 
@@ -330,7 +354,9 @@ fn discover(sh: &Shared, saved: &HashMap<String, State>) {
                     agent: name,
                     frozen: ev.frozen,
                     populated: ev.populated,
-                    saved: saved.get(ent.file_name().to_string_lossy().as_ref()).copied(),
+                    saved: saved
+                        .get(ent.file_name().to_string_lossy().as_ref())
+                        .copied(),
                 },
             };
             let _ = sh.handle(event);
@@ -380,7 +406,9 @@ async fn ticker(sh: Arc<Shared>, saved: HashMap<String, State>) {
 fn spawn_park(sh: &Arc<Shared>, agent: String) {
     let sh = sh.clone();
     tokio::spawn(async move {
-        let Ok(_slot) = sh.park_slots.acquire().await else { return };
+        let Ok(_slot) = sh.park_slots.acquire().await else {
+            return;
+        };
         // Thawed by an acquire while waiting for a slot: skip.
         if sh.state_of(&agent) != Some(State::Parked) {
             return;
@@ -419,9 +447,9 @@ async fn status(sh: &Arc<Shared>, since: u64) -> Value {
                 let mem = k.as_ref().and_then(|k| k.memory_current().ok());
                 let stat = k.as_ref().and_then(|k| k.memory_stat().ok());
                 let cpu = k.as_ref().and_then(|k| k.cpu_usage_us().ok());
-                let park = parks.get(&name).map(|p| {
-                    json!({ "before": p.before, "after": p.after, "ms": p.ms, "full": p.full })
-                });
+                let park = parks.get(&name).map(
+                    |p| json!({ "before": p.before, "after": p.after, "ms": p.ms, "full": p.full }),
+                );
                 json!({
                     "agent": name,
                     "state": a.state.name(),
@@ -475,8 +503,12 @@ async fn request(sh: &Arc<Shared>, line: &str, peer: Option<&str>, root: bool) -
     };
     let from = sh.state_of(&agent);
     let ev = match op {
-        "acquire" => Event::Acquire { agent: agent.clone() },
-        "release" => Event::Release { agent: agent.clone() },
+        "acquire" => Event::Acquire {
+            agent: agent.clone(),
+        },
+        "release" => Event::Release {
+            agent: agent.clone(),
+        },
         _ => return json!({ "ok": false, "error": format!("unknown op {op}") }),
     };
     // A desk that connects before discovery found its kiosk.

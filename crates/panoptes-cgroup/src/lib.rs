@@ -26,16 +26,24 @@ pub const ROOT: &str = "/sys/fs/cgroup";
 #[derive(Debug)]
 pub enum Error {
     /// A read, write, or directory operation on `path` failed.
-    Io { path: PathBuf, source: io::Error },
+    Io {
+        path: PathBuf,
+        source: io::Error,
+    },
     /// A system call outside the cgroup tree failed.
     Os {
         call: &'static str,
         source: io::Error,
     },
     /// An interface file did not have the documented shape.
-    Parse { path: PathBuf },
+    Parse {
+        path: PathBuf,
+    },
     /// `cgroup.events` did not reach the wanted state in time.
-    Timeout { path: PathBuf, waited: Duration },
+    Timeout {
+        path: PathBuf,
+        waited: Duration,
+    },
     /// The running kernel lacks a feature.
     Unsupported(&'static str),
     InvalidArgument(&'static str),
@@ -168,7 +176,8 @@ impl Cgroup {
     }
 
     pub fn memory_stat(&self) -> Result<MemoryStat> {
-        parse::memory_stat(&self.read("memory.stat")?).ok_or_else(|| self.parse_error("memory.stat"))
+        parse::memory_stat(&self.read("memory.stat")?)
+            .ok_or_else(|| self.parse_error("memory.stat"))
     }
 
     pub fn memory_pressure(&self) -> Result<Pressure> {
@@ -272,7 +281,9 @@ impl Cgroup {
     /// and never reach the swap device (Linux 6.8 or later).
     pub fn set_zswap_writeback(&self, on: bool) -> Result<()> {
         if !self.path.join("memory.zswap.writeback").exists() {
-            return Err(Error::Unsupported("memory.zswap.writeback (Linux 6.8 or later)"));
+            return Err(Error::Unsupported(
+                "memory.zswap.writeback (Linux 6.8 or later)",
+            ));
         }
         self.write("memory.zswap.writeback", if on { "1" } else { "0" })
     }

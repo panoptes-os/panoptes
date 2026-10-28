@@ -37,7 +37,11 @@ fn colors(k: Kind) -> (Color, Color) {
 
 fn mib(b: u64) -> String {
     let m = b as f64 / (1 << 20) as f64;
-    if m >= 1024.0 { format!("{:.1}G", m / 1024.0) } else { format!("{m:.0}M") }
+    if m >= 1024.0 {
+        format!("{:.1}G", m / 1024.0)
+    } else {
+        format!("{m:.0}M")
+    }
 }
 
 fn bold(s: impl Into<String>, fg: Color) -> Span<'static> {
@@ -68,8 +72,8 @@ pub fn draw(f: &mut Frame, app: &mut App) -> usize {
         detail(f, app, body);
         per_row(body.width / 2)
     } else {
-        let [g, d] =
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(body);
+        let [g, d] = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .areas(body);
         let n = grid(f, app, g);
         detail(f, app, d);
         n
@@ -106,7 +110,10 @@ fn header(f: &mut Frame, app: &App, r: Rect) {
     }
     if !app.resd_up {
         counts.push(plain("  "));
-        counts.push(Span::styled(" resd unreachable ", Style::new().fg(WHITE).bg(RED)));
+        counts.push(Span::styled(
+            " resd unreachable ",
+            Style::new().fg(WHITE).bg(RED),
+        ));
     }
 
     let used = fr.mem_total.saturating_sub(fr.mem_available);
@@ -131,9 +138,16 @@ fn header(f: &mut Frame, app: &App, r: Rect) {
         gauges.push(plain("   GPU "));
         gauges.push(bold(format!("{u:.0}% {:.1}G", m / 1024.0), MAGENTA));
     }
-    let bar = meter(r.width.saturating_sub(2) as usize, fr.mem_total, used, app.zswap_pool.unwrap_or(zs));
+    let bar = meter(
+        r.width.saturating_sub(2) as usize,
+        fr.mem_total,
+        used,
+        app.zswap_pool.unwrap_or(zs),
+    );
     let p = Paragraph::new(vec![Line::from(counts), Line::from(gauges), bar]).block(
-        Block::new().borders(Borders::BOTTOM).border_style(Style::new().fg(WHITE)),
+        Block::new()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::new().fg(WHITE)),
     );
     f.render_widget(p, r);
 }
@@ -182,7 +196,11 @@ fn grid(f: &mut Frame, app: &App, r: Rect) -> usize {
                 _ => format!("{:>2}", a.steps.min(99)),
             };
             // Brackets mark the selection even without color.
-            let (l, r) = if i == app.selected { ("[", "]") } else { (" ", " ") };
+            let (l, r) = if i == app.selected {
+                ("[", "]")
+            } else {
+                (" ", " ")
+            };
             top.push(Span::styled(format!("{l}{id:<4}{r}"), st));
             bot.push(Span::styled(format!("   {mark} "), st));
             top.push(plain(" "));
@@ -205,7 +223,10 @@ fn grid(f: &mut Frame, app: &App, r: Rect) -> usize {
         Kind::Queued,
     ] {
         let (bg, fg) = colors(k);
-        legend.push(Span::styled(format!(" {} ", k.label()), Style::new().fg(fg).bg(bg)));
+        legend.push(Span::styled(
+            format!(" {} ", k.label()),
+            Style::new().fg(fg).bg(bg),
+        ));
         legend.push(plain(" "));
     }
     lines.push(Line::from(legend));
@@ -243,7 +264,10 @@ fn detail(f: &mut Frame, app: &mut App, r: Rect) {
     cg.push(bold(a.zswapped.map_or("-".into(), mib), BLUE));
     let frozen = matches!(a.kind, Kind::Waiting | Kind::Parked);
     cg.push(plain("  frozen "));
-    cg.push(bold(if frozen { "yes" } else { "no" }, if frozen { AMBER } else { GREEN }));
+    cg.push(bold(
+        if frozen { "yes" } else { "no" },
+        if frozen { AMBER } else { GREEN },
+    ));
     lines.push(Line::from(cg));
     if let Some(p) = &a.last_park {
         lines.push(Line::from(vec![
@@ -263,9 +287,14 @@ fn detail(f: &mut Frame, app: &mut App, r: Rect) {
         " step  model  action settle observe  total  calls",
         WHITE,
     )));
-    let ms = |t: &serde_json::Value, k: &str| t[k].as_f64().map_or("    -".into(), |v| format!("{v:>5.0}"));
+    let ms = |t: &serde_json::Value, k: &str| {
+        t[k].as_f64()
+            .map_or("    -".into(), |v| format!("{v:>5.0}"))
+    };
     for t in a.recent.iter().rev() {
-        let acts = t["actions"].as_u64().map_or(String::new(), |n| format!("{n:>4}"));
+        let acts = t["actions"]
+            .as_u64()
+            .map_or(String::new(), |n| format!("{n:>4}"));
         let err = t["error"].as_str().map(|e| format!(" ERR {e}"));
         let mut row = vec![
             plain(format!(" {:>4}", t["step"].as_u64().unwrap_or(0))),
@@ -293,7 +322,11 @@ fn detail(f: &mut Frame, app: &mut App, r: Rect) {
 }
 
 fn truncate(s: &str, n: usize) -> String {
-    if s.chars().count() <= n { s.to_owned() } else { s.chars().take(n - 1).collect::<String>() + "…" }
+    if s.chars().count() <= n {
+        s.to_owned()
+    } else {
+        s.chars().take(n - 1).collect::<String>() + "…"
+    }
 }
 
 /// The capture as `▀` cells: foreground is the upper pixel, background the
@@ -317,7 +350,11 @@ fn thumbnail(f: &mut Frame, im: &Image, r: Rect) {
     for cy in 0..h.div_ceil(2) {
         for x in 0..w {
             let top = px(x, cy * 2);
-            let bot = if cy * 2 + 1 < h { px(x, cy * 2 + 1) } else { BLACK };
+            let bot = if cy * 2 + 1 < h {
+                px(x, cy * 2 + 1)
+            } else {
+                BLACK
+            };
             if let Some(cell) = buf.cell_mut((r.x + 1 + x as u16, r.y + cy as u16)) {
                 cell.set_symbol("▀").set_fg(top).set_bg(bot);
             }

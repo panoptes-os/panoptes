@@ -47,7 +47,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn hold_secs(rest: &[String]) -> Result<Duration, Box<dyn std::error::Error>> {
-    Ok(Duration::from_secs(rest.first().map_or(Ok(20), |s| s.parse())?))
+    Ok(Duration::from_secs(
+        rest.first().map_or(Ok(20), |s| s.parse())?,
+    ))
 }
 
 fn park(cg: &Cgroup, hold: Duration) -> Result<(), Box<dyn std::error::Error>> {
@@ -66,9 +68,16 @@ fn park(cg: &Cgroup, hold: Duration) -> Result<(), Box<dyn std::error::Error>> {
     println!("group\t{}", cg.path().display());
     println!("before_mib\t{:.1}", before as f64 / MIB as f64);
     println!("freeze_ms\t{:.2}", froze.as_secs_f64() * 1e3);
-    println!("reclaim_ms\t{:.1}\t{outcome:?}", reclaimed.as_secs_f64() * 1e3);
+    println!(
+        "reclaim_ms\t{:.1}\t{outcome:?}",
+        reclaimed.as_secs_f64() * 1e3
+    );
     println!("parked_mib\t{:.1}", after as f64 / MIB as f64);
-    println!("after_hold_mib\t{:.1}\t{}s", held as f64 / MIB as f64, hold.as_secs());
+    println!(
+        "after_hold_mib\t{:.1}\t{}s",
+        held as f64 / MIB as f64,
+        hold.as_secs()
+    );
     println!(
         "zswap_mib\t{:.1}\tholds {:.1} MiB",
         parked.get("zswap").unwrap_or(0) as f64 / MIB as f64,

@@ -74,11 +74,20 @@ pub enum Event {
         saved: Option<State>,
     },
     /// The kiosk's processes are gone, or its cgroup is.
-    Lost { agent: String },
-    Acquire { agent: String },
-    Release { agent: String },
+    Lost {
+        agent: String,
+    },
+    Acquire {
+        agent: String,
+    },
+    Release {
+        agent: String,
+    },
     /// Periodic check, with the host's MemAvailable and SwapFree in bytes.
-    Tick { mem_available: u64, swap_free: u64 },
+    Tick {
+        mem_available: u64,
+        swap_free: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,8 +196,7 @@ impl Policy {
                     (true, false, Some(State::Acting)) => State::Acting,
                     (true, false, _) => State::Starting,
                 };
-                self.agents
-                    .insert(agent, Agent { state, since: now });
+                self.agents.insert(agent, Agent { state, since: now });
             }
             Event::Lost { agent } => self.set(&agent, State::Evicted, now),
             Event::Acquire { agent } => {
@@ -342,7 +350,10 @@ mod tests {
     #[test]
     fn acquire_release_cycle() {
         let mut p = policy();
-        assert_eq!(acq(&mut p, "a", 10), vec![Action::Weight("a".into(), 10_000)]);
+        assert_eq!(
+            acq(&mut p, "a", 10),
+            vec![Action::Weight("a".into(), 10_000)]
+        );
         assert_eq!(state(&p, "a"), State::Acting);
         // A second acquire while acting does nothing.
         assert!(acq(&mut p, "a", 11).is_empty());
@@ -364,7 +375,10 @@ mod tests {
         let mut p = policy();
         rel(&mut p, "a", 100);
         assert!(tick(&mut p, 100 * GIB, 1_099).is_empty());
-        assert_eq!(tick(&mut p, 100 * GIB, 1_100), vec![Action::Park("a".into())]);
+        assert_eq!(
+            tick(&mut p, 100 * GIB, 1_100),
+            vec![Action::Park("a".into())]
+        );
         assert_eq!(state(&p, "a"), State::Parked);
         // Parked agents are not parked twice.
         assert!(tick(&mut p, 100 * GIB, 5_000).is_empty());

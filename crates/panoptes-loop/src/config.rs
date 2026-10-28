@@ -195,7 +195,10 @@ mod tests {
 
     #[test]
     fn expands_placeholders_in_every_word() {
-        let cmd = vec!["--unit=pdesk-{i}".to_owned(), "exec x --run-dir {run}".to_owned()];
+        let cmd = vec![
+            "--unit=pdesk-{i}".to_owned(),
+            "exec x --run-dir {run}".to_owned(),
+        ];
         assert_eq!(
             expand(&cmd, 7, "/r/7"),
             vec!["--unit=pdesk-7", "exec x --run-dir /r/7"]
