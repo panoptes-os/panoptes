@@ -1,32 +1,31 @@
-//! panoptes-desk: one agent's control server.
+//! panoptes-desk: one agent's desktop and its control server.
 //!
-//! It moves itself into `<agent>/desk`, starts Cage and Chromium in
-//! `<agent>/kiosk`, drives the browser over its debugging pipe, and serves
-//! the agent's tools on a unix socket (the internal protocol and MCP) and,
-//! with `--mcp-stdio`, MCP on stdin and stdout.
+//! It moves itself into `<agent>/desk`, starts the Cage fork with no client
+//! in `<agent>/kiosk`, drives it as a Wayland client, and serves the
+//! agent's tools on a unix socket (the internal protocol and MCP) and, with
+//! `--mcp-stdio`, MCP on stdin and stdout.
 
-mod axtext;
 mod desk;
-mod keys;
+mod keymap;
 mod kiosk;
+mod protocol;
 mod resd;
 mod server;
+mod wl;
 
-use kiosk::{CdpMode, Config};
+use kiosk::{Config, Kiosk};
 use panoptes_cgroup::Cgroup;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 const USAGE: &str = "usage: panoptes-desk --run-dir DIR [--cgroup DIR] [--socket PATH] \
-[--size WxH] [--url URL] [--cdp-port N] [--mcp-stdio] [--resd SOCK] [--grace-ms N] \
-[--thumb-ms N] [-- CHROMIUM_FLAGS...]
+[--size WxH] [--mcp-stdio] [--resd SOCK] [--grace-ms N] [--thumb-ms N]
 
-  --run-dir DIR   the agent's directory: runtime, profile, downloads, socket
+  --run-dir DIR   the agent's directory: runtime, home, app logs, socket
   --cgroup DIR    the agent's cgroup (default: the one this process starts in);
                   the desk moves into DIR/desk and the kiosk starts in DIR/kiosk
   --socket PATH   tool socket (default: RUN_DIR/desk.sock)
-  --size WxH      output mode (default 1280x720)
-  --url URL       first page (default about:blank)
-  --cdp-port N    reach DevTools over a loopback port instead of the pipe
+  --size WxH      the screen (default 1024x768)
   --mcp-stdio     also serve MCP on stdin/stdout; exit when it closes
   --resd SOCK     acquire the kiosk from panoptes-resd before each call and
                   release it when calls stop, so it is frozen between steps
@@ -49,21 +48,17 @@ fn parse() -> Result<Args, String> {
     let mut run_dir = None;
     let mut cgroup = None;
     let mut socket = None;
-    let mut size = (1280, 720);
-    let mut url = "about:blank".to_owned();
-    let mut cdp = CdpMode::Pipe;
+    let mut size = (1024, 768);
     let mut mcp_stdio = false;
     let mut resd = None;
     let mut grace_ms = 100;
     let mut thumb_ms = None;
-    let mut extra = Vec::new();
     while let Some(a) = it.next() {
         let mut val = || it.next().ok_or_else(|| format!("{a} needs a value"));
         match a.as_str() {
             "--run-dir" => run_dir = Some(PathBuf::from(val()?)),
             "--cgroup" => cgroup = Some(PathBuf::from(val()?)),
             "--socket" => socket = Some(PathBuf::from(val()?)),
-            "--url" => url = val()?,
             "--size" => {
                 let v = val()?;
                 let (w, h) = v.split_once('x').ok_or("--size is WxH")?;
@@ -72,12 +67,10 @@ fn parse() -> Result<Args, String> {
                     h.parse().map_err(|_| "--size height")?,
                 );
             }
-            "--cdp-port" => cdp = CdpMode::Port(val()?.parse().map_err(|_| "--cdp-port")?),
             "--mcp-stdio" => mcp_stdio = true,
             "--resd" => resd = Some(PathBuf::from(val()?)),
             "--grace-ms" => grace_ms = val()?.parse().map_err(|_| "--grace-ms")?,
             "--thumb-ms" => thumb_ms = Some(val()?.parse().map_err(|_| "--thumb-ms")?),
-            "--" => extra.extend(it.by_ref()),
             "-h" | "--help" => return Err(USAGE.into()),
             other => return Err(format!("unknown argument {other}\n{USAGE}")),
         }
@@ -94,9 +87,6 @@ fn parse() -> Result<Args, String> {
             run_dir,
             width: size.0,
             height: size.1,
-            url,
-            cdp,
-            extra_flags: extra,
         },
     })
 }
@@ -109,7 +99,7 @@ fn main() {
             std::process::exit(2);
         }
     };
-    // Cgroup moves happen before the runtime starts any threads.
+    // Cgroup moves happen before any thread starts.
     let agent = match &args.cgroup {
         Some(p) => Cgroup::open(p),
         None => Cgroup::current(),
@@ -121,22 +111,30 @@ fn main() {
             std::process::exit(1);
         }
     };
+    if let Err(e) = std::fs::create_dir_all(&args.config.run_dir) {
+        eprintln!("panoptes-desk: {}: {e}", args.config.run_dir.display());
+        std::process::exit(1);
+    }
+    let kiosk = match kiosk::start(kiosk_cg, &args.config) {
+        Ok(k) => Arc::new(k),
+        Err(e) => {
+            eprintln!("panoptes-desk: {e}");
+            std::process::exit(1);
+        }
+    };
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
         .build()
         .expect("tokio runtime");
-    let code = rt.block_on(run(args, kiosk_cg));
+    let code = rt.block_on(run(args, kiosk.clone()));
+    kiosk.shutdown();
     std::process::exit(code);
 }
 
-async fn run(args: Args, kiosk_cg: Cgroup) -> i32 {
-    if let Err(e) = std::fs::create_dir_all(&args.config.run_dir) {
-        eprintln!("panoptes-desk: {}: {e}", args.config.run_dir.display());
-        return 1;
-    }
-    let kiosk = match kiosk::launch(kiosk_cg, &args.config).await {
-        Ok(k) => k,
+async fn run(args: Args, kiosk: Arc<Kiosk>) -> i32 {
+    let wl = match wl::Wl::connect(&kiosk.socket) {
+        Ok(w) => w,
         Err(e) => {
             eprintln!("panoptes-desk: {e}");
             return 1;
@@ -149,11 +147,10 @@ async fn run(args: Args, kiosk_cg: Cgroup) -> i32 {
             kiosk.cgroup.clone(),
         )
     });
-    let desk = match desk::Desk::new(kiosk.cdp.clone(), kiosk.downloads.clone(), residency).await {
+    let desk = match desk::Desk::new(wl, kiosk, residency).await {
         Ok(d) => d,
         Err(e) => {
             eprintln!("panoptes-desk: {e}");
-            kiosk.shutdown().await;
             return 1;
         }
     };
@@ -188,6 +185,5 @@ async fn run(args: Args, kiosk_cg: Cgroup) -> i32 {
         _ = term.recv() => 0,
     };
     let _ = std::fs::remove_file(&socket);
-    kiosk.shutdown().await;
     code
 }

@@ -32,7 +32,7 @@ pub struct Frame {
     pub results: Option<Vec<Value>>,
     /// Invoices assigned to the run.
     pub assigned: usize,
-    /// Changed thumbnails: (agent index, base64 JPEG).
+    /// Changed thumbnails: (agent index, base64 PNG).
     pub thumbs: Vec<(usize, String)>,
 }
 

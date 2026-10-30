@@ -313,15 +313,20 @@ impl App {
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(b64.trim())
                 .ok()?;
-            let mut d = jpeg_decoder::Decoder::new(&bytes[..]);
-            let px = d.decode().ok()?;
-            let info = d.info()?;
+            let mut reader = png::Decoder::new(std::io::Cursor::new(&bytes[..]))
+                .read_info()
+                .ok()?;
+            let mut px = vec![0; reader.output_buffer_size()?];
+            let info = reader.next_frame(&mut px).ok()?;
+            if info.bit_depth != png::BitDepth::Eight {
+                return None;
+            }
             let (w, h) = (info.width as usize, info.height as usize);
-            let rgb = match info.pixel_format {
-                jpeg_decoder::PixelFormat::RGB24 => {
-                    px.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect()
-                }
-                jpeg_decoder::PixelFormat::L8 => px.iter().map(|&g| [g, g, g]).collect(),
+            let px = &px[..info.buffer_size()];
+            let rgb = match info.color_type {
+                png::ColorType::Rgb => px.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
+                png::ColorType::Rgba => px.chunks_exact(4).map(|c| [c[0], c[1], c[2]]).collect(),
+                png::ColorType::Grayscale => px.iter().map(|&g| [g, g, g]).collect(),
                 _ => return None,
             };
             self.thumb_cache = Some((i, key, Image { w, h, rgb }));

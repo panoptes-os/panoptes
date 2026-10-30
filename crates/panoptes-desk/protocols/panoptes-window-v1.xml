@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="panoptes_window_v1">
+  <description summary="windows as the compositor places them">
+    Lists every managed toplevel window with what an agent needs to act on
+    it: the process that owns it, its app_id and title, where it sits, the
+    window it is a dialog of, and whether it has keyboard focus. A client can
+    focus or close any window.
+
+    Popups, such as menus and tooltips, are not listed, nor are X11
+    override-redirect windows.
+  </description>
+
+  <interface name="panoptes_window_manager_v1" version="1">
+    <description summary="announces windows">
+      On bind the compositor sends xwayland if it runs Xwayland, then a
+      window event for every current window, then each window's initial
+      state. Windows that map later are announced as they map.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="stop announcing windows">
+        Window objects already announced stay valid.
+      </description>
+    </request>
+
+    <event name="xwayland">
+      <description summary="where X11 clients connect">
+        The DISPLAY value for X11 clients, such as ":1". Sent once on bind,
+        only when the compositor runs Xwayland.
+      </description>
+      <arg name="display" type="string"/>
+    </event>
+
+    <event name="window">
+      <description summary="a window to list">
+        Its initial state follows on the new object, ended by done.
+      </description>
+      <arg name="window" type="new_id" interface="panoptes_window_v1"/>
+    </event>
+  </interface>
+
+  <interface name="panoptes_window_v1" version="1">
+    <description summary="one toplevel window">
+      Property events describe the window, and done marks a consistent
+      state. After the initial state the compositor sends only the
+      properties that changed, then done.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="forget the window">
+        The window itself stays open; use close to close it.
+      </description>
+    </request>
+
+    <request name="activate">
+      <description summary="raise the window and give it keyboard focus"/>
+    </request>
+
+    <request name="close">
+      <description summary="ask the window's client to close it">
+        The client may refuse, or ask its user first.
+      </description>
+    </request>
+
+    <event name="pid">
+      <description summary="the process that owns the window">
+        For a Wayland window, the process on the other end of the client's
+        connection. For an X11 window, the process Xwayland reports for the
+        client's connection. Zero when unknown. Sent once, in the initial
+        state.
+      </description>
+      <arg name="pid" type="int"/>
+    </event>
+
+    <event name="app_id">
+      <description summary="the application's identifier">
+        The xdg_toplevel app_id, or the class of an X11 window's WM_CLASS.
+        Empty when the client sets none.
+      </description>
+      <arg name="app_id" type="string"/>
+    </event>
+
+    <event name="title">
+      <description summary="the window's title">
+        Empty when the client sets none.
+      </description>
+      <arg name="title" type="string"/>
+    </event>
+
+    <event name="geometry">
+      <description summary="where the window sits">
+        The window's box in output layout coordinates, without client-side
+        shadows: for an xdg toplevel, its window geometry. With one output
+        at scale 1 these are output pixels: the space of screenshots and of
+        absolute pointer motion.
+      </description>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </event>
+
+    <event name="parent">
+      <description summary="the window this one is a dialog of">
+        Null for a main window, and for a parent that is not listed.
+      </description>
+      <arg name="parent" type="object" interface="panoptes_window_v1" allow-null="true"/>
+    </event>
+
+    <event name="focused">
+      <description summary="whether the window has keyboard focus"/>
+      <arg name="focused" type="uint" summary="1 if focused, else 0"/>
+    </event>
+
+    <event name="done">
+      <description summary="the properties sent so far form one state"/>
+    </event>
+
+    <event name="closed">
+      <description summary="the window is gone">
+        No more events follow, and the compositor ignores requests on the
+        object. The client should destroy it.
+      </description>
+    </event>
+  </interface>
+</protocol>
