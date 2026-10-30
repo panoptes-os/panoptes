@@ -6,11 +6,11 @@
 //! one JSON object per line each way:
 //!
 //! ```text
-//! > {"id":1,"tool":"click","args":{"node_id":42}}
-//! < {"id":1,"ok":true,"result":{"x":412,"y":188},"timing":{"action_ms":3.1,"total_ms":3.2}}
+//! > {"id":1,"tool":"click","args":{"x":412,"y":188,"screenshot":false}}
+//! < {"id":1,"ok":true,"result":{"settled_ms":301.9,"timed_out":false,"windows":{...}},"timing":{...}}
 //! ```
 //!
-//! A screenshot reply adds `"image":{"mime":"image/jpeg","data":"<base64>"}`.
+//! A reply with a screenshot adds `"image":{"mime":"image/png","data":"<base64>"}`.
 
 use crate::desk::{Desk, Output, tools};
 use rmcp::model::{
@@ -117,8 +117,8 @@ fn timing(out: &Output, start: Instant) -> Value {
 fn reply(id: Value, out: Output, start: Instant) -> Value {
     let mut r =
         json!({ "id": id, "ok": true, "result": out.result, "timing": timing(&out, start) });
-    if let Some((mime, data)) = out.image {
-        r["image"] = json!({ "mime": mime, "data": data });
+    if let Some(data) = out.png {
+        r["image"] = json!({ "mime": "image/png", "data": data });
     }
     r
 }
@@ -152,8 +152,9 @@ impl ServerHandler for DeskMcp {
                 env!("CARGO_PKG_VERSION"),
             ))
             .with_instructions(
-                "One Panoptes agent's browser kiosk. Read ax_tree for node ids, act with \
-                 click, type, and key, and call wait_settled before the next screenshot.",
+                "One Panoptes agent's Linux desktop. Start programs with launch, find \
+                 their windows with windows, and act with click, type, and key at the \
+                 pixel coordinates of the screenshot each action returns.",
             )
     }
 
@@ -190,12 +191,12 @@ impl ServerHandler for DeskMcp {
             let result = match desk.call(&request.name, &args).await {
                 Ok(out) => {
                     let mut text = json!({ "result": out.result, "timing": timing(&out, start) });
-                    if out.image.is_some() {
+                    if out.png.is_some() {
                         text["image"] = json!("attached");
                     }
                     let mut content = vec![ContentBlock::text(text.to_string())];
-                    if let Some((mime, data)) = out.image {
-                        content.push(ContentBlock::image(data, mime));
+                    if let Some(data) = out.png {
+                        content.push(ContentBlock::image(data, "image/png"));
                     }
                     CallToolResult::success(content)
                 }

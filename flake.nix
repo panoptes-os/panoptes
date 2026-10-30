@@ -67,6 +67,12 @@
         cage-windows = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/cage-windows.nix {
           inherit (self.packages.${system}) cage;
         };
+        window-protocol = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/window-protocol.nix {
+          inherit cage-src;
+        };
+        desk = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/desk.nix {
+          inherit (self.packages.${system}) panoptes cage;
+        };
       });
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt);
