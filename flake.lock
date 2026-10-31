@@ -1,5 +1,22 @@
 {
   "nodes": {
+    "cage-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793408743,
+        "narHash": "sha256-qtb7+UoTHEkRtjVebD9o9jRUnNQRoQfzOScygaJanPM=",
+        "owner": "panoptes-os",
+        "repo": "cage",
+        "rev": "c95ed89df9e896b393cc2fe5c9008975fab011d9",
+        "type": "github"
+      },
+      "original": {
+        "owner": "panoptes-os",
+        "ref": "panoptes",
+        "repo": "cage",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1792773339,
@@ -18,6 +35,7 @@
     },
     "root": {
       "inputs": {
+        "cage-src": "cage-src",
         "nixpkgs": "nixpkgs"
       }
     }

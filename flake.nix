@@ -2,9 +2,19 @@
   description = "Panoptes: agents that sleep in turns";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  # Cage 0.3.1 with -r and panoptes_window_v1.
+  inputs.cage-src = {
+    url = "github:panoptes-os/cage/panoptes";
+    flake = false;
+  };
 
   outputs =
-    { self, nixpkgs, ... }:
+    {
+      self,
+      nixpkgs,
+      cage-src,
+      ...
+    }:
     let
       systems = [
         "x86_64-linux"
@@ -39,17 +49,30 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
           panoptes = pkgs.callPackage ./nix/package.nix { };
+          cage = pkgs.callPackage ./nix/cage.nix { src = cage-src; };
         in
         {
-          inherit panoptes;
+          inherit panoptes cage;
           default = panoptes;
           # nix build .#image && docker load < result
-          image = pkgs.callPackage ./nix/image.nix { inherit panoptes; };
+          image = pkgs.callPackage ./nix/image.nix { inherit panoptes cage; };
         }
       );
 
       checks = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system: {
-        inherit (self.packages.${system}) panoptes;
+        inherit (self.packages.${system}) panoptes cage;
+        cage-size = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/cage-size.nix {
+          inherit (self.packages.${system}) cage;
+        };
+        cage-windows = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/cage-windows.nix {
+          inherit (self.packages.${system}) cage;
+        };
+        window-protocol = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/window-protocol.nix {
+          inherit cage-src;
+        };
+        desk = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/desk.nix {
+          inherit (self.packages.${system}) panoptes cage;
+        };
       });
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt);

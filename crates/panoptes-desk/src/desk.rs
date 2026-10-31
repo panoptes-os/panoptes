@@ -1,76 +1,66 @@
-//! The tools an agent drives its kiosk with. Both front ends, the internal
-//! socket protocol and MCP, call [`Desk::call`].
+//! The tools an agent drives its desktop with. Both front ends, the
+//! internal socket protocol and MCP, call [`Desk::call`].
+//!
+//! Coordinates are output pixels, the pixels of every screenshot. Tools
+//! that act wait for the screen to settle, then report it:
+//!
+//! ```text
+//! click {x, y}
+//!   -> input sent
+//!   -> settle: damaged frames until none for quiet_ms, or settle_ms passes
+//!   <- {settled_ms, timed_out, windows: {opened, closed, focused}} + PNG
+//! ```
 
+use crate::keymap::{Keymap, Step};
+use crate::kiosk::Kiosk;
 use crate::resd::Residency;
-use crate::{axtext, keys};
-use panoptes_cdp::cmd::{FileInput, ImageFormat, MouseKind, Session};
-use panoptes_cdp::{Cdp, Event};
+use crate::wl::{Frame, Window, Windows, Wl};
+use base64::Engine;
 use serde_json::{Value, json};
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// A tool's result: JSON for the caller, an image for screenshot, and how
-/// long the action and the capture took.
+/// A tool's result: JSON for the caller, the screen when the tool shows
+/// it, and how long the tool took.
 #[derive(Debug)]
 pub struct Output {
     pub result: Value,
-    pub image: Option<(&'static str, String)>,
+    /// The screen as a base64 PNG.
+    pub png: Option<String>,
+    /// Everything before the screenshot: input, waiting, settling.
     pub action_ms: f64,
+    /// Taking and encoding the screenshot.
     pub capture_ms: Option<f64>,
     /// Time to thaw or resume the kiosk first, when it was frozen.
     pub wake_ms: Option<f64>,
 }
 
-impl Output {
-    fn json(result: Value, action: Instant) -> Self {
-        Output {
-            result,
-            image: None,
-            action_ms: ms(action.elapsed()),
-            capture_ms: None,
-            wake_ms: None,
-        }
-    }
-}
-
-fn clip_url(u: &str) -> String {
-    u.chars().take(160).collect()
-}
+/// Defaults of the tools' optional arguments, as their schemas show them.
+const QUIET_MS: u64 = 300;
+const SETTLE_MS: u64 = 3000;
+const TIMEOUT_MS: u64 = 10_000;
+const SCROLL_NOTCHES: i32 = 3;
 
 fn ms(d: Duration) -> f64 {
     (d.as_secs_f64() * 1e5).round() / 100.0
 }
 
-/// Page activity, kept current by the event task.
-#[derive(Debug, Default)]
-struct PageState {
-    /// Requests in flight, with their start time; long polls age out.
-    /// requestId -> (sent, loaderId, url)
-    inflight: HashMap<String, (Instant, String, String)>,
-    loader: String,
-    lifecycle: Vec<String>,
-    downloads: HashMap<String, Value>,
-}
-
 #[derive(Debug)]
 pub struct Desk {
-    browser: Cdp,
-    page: Mutex<Session>,
-    /// Pages opened from the current one, newest last.
-    stack: Mutex<Vec<Session>>,
-    state: Arc<Mutex<PageState>>,
-    downloads: PathBuf,
-    busy: tokio::sync::Mutex<()>,
+    wl: Wl,
+    kiosk: Arc<Kiosk>,
+    /// One tool at a time; the keymap the compositor holds goes with the
+    /// turn.
+    turn: tokio::sync::Mutex<Keymap>,
     residency: Option<Arc<Residency>>,
     /// Small captures for `panoptes top`, off unless set.
     thumb: Mutex<Option<Thumb>>,
 }
 
-/// Where and how often the desk writes a thumbnail of its page: a base64
-/// JPEG at a tenth of the viewport, replaced atomically, taken only right
-/// after a tool call while the kiosk is already thawed.
+/// Where and how often the desk writes a thumbnail: a base64 PNG at a
+/// tenth of the output's size, replaced atomically, taken only right after
+/// a tool call while the kiosk is already thawed.
 #[derive(Debug)]
 struct Thumb {
     path: PathBuf,
@@ -81,167 +71,219 @@ struct Thumb {
 /// Name, description, and JSON Schema of every tool, shared by both front
 /// ends.
 pub fn tools() -> Vec<(&'static str, &'static str, Value)> {
-    let node = json!({ "type": "integer", "description": "node id from ax_tree" });
-    vec![
+    let x = json!({ "type": "integer", "description": "pixels from the screen's left edge" });
+    let y = json!({ "type": "integer", "description": "pixels from the screen's top edge" });
+    let button =
+        json!({ "type": "string", "enum": ["left", "right", "middle"], "default": "left" });
+    let window = json!({ "type": "integer", "description": "window id from windows" });
+    let mut tools = vec![
         (
             "screenshot",
-            "Capture the visible page. Returns an image plus its size.",
-            json!({ "type": "object", "properties": {
-                "format": { "type": "string", "enum": ["jpeg", "png"], "default": "jpeg" },
-                "quality": { "type": "integer", "minimum": 1, "maximum": 100, "default": 80 },
-                "scale": { "type": "number", "minimum": 0.1, "maximum": 1.0, "default": 1.0 } } }),
+            "Capture the screen as a PNG. Its pixels are the coordinates every other tool takes.",
+            json!({ "type": "object", "properties": {} }),
         ),
         (
+            "windows",
+            "List the open windows: id, pid, app_id, title, box (x, y, width, height), focus, \
+and parent (the window a dialog belongs to). Also Xwayland's DISPLAY.",
+            json!({ "type": "object", "properties": {} }),
+        ),
+    ];
+    let acting = [
+        (
             "click",
-            "Click at viewport coordinates {x, y}, or at the center of an ax_tree node {node_id}.",
-            json!({ "type": "object", "properties": {
-                "x": { "type": "number" }, "y": { "type": "number" }, "node_id": node,
-                "button": { "type": "string", "enum": ["left", "right", "middle"], "default": "left" },
+            "Move the pointer to {x, y} and click.",
+            json!({ "type": "object", "required": ["x", "y"], "properties": {
+                "x": x, "y": y, "button": button,
                 "count": { "type": "integer", "minimum": 1, "maximum": 3, "default": 1 } } }),
         ),
         (
-            "type",
-            "Insert text at the focus, or into an ax_tree node {node_id} after focusing it.",
-            json!({ "type": "object", "required": ["text"], "properties": {
-                "text": { "type": "string" }, "node_id": node } }),
+            "move",
+            "Move the pointer to {x, y}, as for hovering.",
+            json!({ "type": "object", "required": ["x", "y"], "properties": {
+                "x": x, "y": y } }),
+        ),
+        (
+            "drag",
+            "Press a button at {x, y}, move to {to_x, to_y}, and release it there.",
+            json!({ "type": "object", "required": ["x", "y", "to_x", "to_y"], "properties": {
+                "x": x, "y": y, "to_x": x, "to_y": y, "button": button } }),
+        ),
+        (
+            "scroll",
+            "Turn the wheel over {x, y} by whole notches: dy positive scrolls down, dx positive right.",
+            json!({ "type": "object", "required": ["x", "y"], "properties": {
+                "x": x, "y": y,
+                "dx": { "type": "integer", "default": 0 },
+                "dy": { "type": "integer", "default": SCROLL_NOTCHES } } }),
         ),
         (
             "key",
-            "Press one key or chord: Enter, Tab, Escape, Backspace, ArrowDown, Control+a, ...",
+            "Press a key or chord on the focused window: Return, Escape, Tab, BackSpace, Page_Down, \
+F5, ctrl+s, ctrl+shift+t, alt+F4, super, ... Names are xkb keysym names, case-insensitive.",
             json!({ "type": "object", "required": ["key"], "properties": {
                 "key": { "type": "string" } } }),
         ),
         (
-            "scroll",
-            "Scroll by {dy} pixels (positive is down), at {x, y} or the viewport center.",
+            "type",
+            "Type text into the focused window, any Unicode; newlines press Return.",
+            json!({ "type": "object", "required": ["text"], "properties": {
+                "text": { "type": "string" } } }),
+        ),
+        (
+            "launch",
+            "Start a program on this desktop, then wait up to timeout_ms for a new window. \
+Returns its pid; output goes to a log, whose tail is in the error if it exits first.",
+            json!({ "type": "object", "required": ["argv"], "properties": {
+                "argv": { "type": "array", "items": { "type": "string" }, "minItems": 1,
+                    "description": "program and arguments, such as [\"gnome-calculator\"]" },
+                "env": { "type": "object", "additionalProperties": { "type": "string" },
+                    "description": "extra environment variables" },
+                "timeout_ms": { "type": "integer", "default": TIMEOUT_MS } } }),
+        ),
+        (
+            "focus",
+            "Raise a window and give it keyboard focus.",
+            json!({ "type": "object", "required": ["window"], "properties": {
+                "window": window } }),
+        ),
+        (
+            "close",
+            "Ask a window to close, as its close button would; the app may refuse or ask first.",
+            json!({ "type": "object", "required": ["window"], "properties": {
+                "window": window } }),
+        ),
+        (
+            "kill",
+            "Kill a process of this desktop at once (SIGKILL), given a window or a pid.",
             json!({ "type": "object", "properties": {
-                "dx": { "type": "number", "default": 0 }, "dy": { "type": "number", "default": 300 },
-                "x": { "type": "number" }, "y": { "type": "number" } } }),
+                "window": window, "pid": { "type": "integer" } } }),
         ),
         (
-            "navigate",
-            "Open a URL and wait for its load event.",
-            json!({ "type": "object", "required": ["url"], "properties": {
-                "url": { "type": "string" },
-                "timeout_ms": { "type": "integer", "default": 15000 } } }),
-        ),
-        (
-            "ax_tree",
-            "The page's accessibility tree as compact text: [node_id] role \"name\" value=... @(x,y wxh).",
+            "wait",
+            "Wait up to timeout_ms for a window matching every given filter to exist, or with \
+closed, for none to; then for the screen to settle. With no filter, only settle.",
             json!({ "type": "object", "properties": {
-                "max_bytes": { "type": "integer", "default": 24000 } } }),
+                "app_id": { "type": "string" },
+                "title": { "type": "string", "description": "part of the title" },
+                "pid": { "type": "integer" },
+                "closed": { "type": "boolean", "default": false },
+                "timeout_ms": { "type": "integer", "default": TIMEOUT_MS } } }),
         ),
-        (
-            "wait_settled",
-            "Wait until the page has loaded, the network is quiet, and the layout stops changing for quiet_ms.",
-            json!({ "type": "object", "properties": {
-                "quiet_ms": { "type": "integer", "default": 300 },
-                "timeout_ms": { "type": "integer", "default": 5000 } } }),
-        ),
-        (
-            "download_list",
-            "Files in this agent's download directory, and downloads still in progress.",
-            json!({ "type": "object", "properties": {} }),
-        ),
-        (
-            "upload",
-            "Put a downloaded file into a file input, given by ax_tree {node_id} or CSS {selector}. \
-{path} is a file name in this agent's download directory.",
-            json!({ "type": "object", "required": ["path"], "properties": {
-                "path": { "type": "string" }, "node_id": node,
-                "selector": { "type": "string", "default": "input[type=file]" } } }),
-        ),
-        (
-            "read_pdf",
-            "Text of a downloaded PDF, laid out as on the page (pdftotext -layout). \
-{path} is a file name in this agent's download directory; the text is cut to max_bytes.",
-            json!({ "type": "object", "required": ["path"], "properties": {
-                "path": { "type": "string" },
-                "max_bytes": { "type": "integer", "default": 8000 } } }),
-        ),
-        (
-            "reload",
-            "Reload the page and wait for its load event.",
-            json!({ "type": "object", "properties": {
-                "timeout_ms": { "type": "integer", "default": 15000 } } }),
-        ),
-    ]
+    ];
+    // Every tool that acts also takes these.
+    for (name, about, mut schema) in acting {
+        let p = &mut schema["properties"];
+        p["screenshot"] = json!({ "type": "boolean", "default": true,
+            "description": "attach a screenshot taken once the screen settles" });
+        p["quiet_ms"] = json!({ "type": "integer", "default": QUIET_MS,
+            "description": "the screen has settled after this long without a change" });
+        p["settle_ms"] = json!({ "type": "integer", "default": SETTLE_MS,
+            "description": "stop waiting for the screen to settle after this long" });
+        tools.push((name, about, schema));
+    }
+    tools
 }
 
-/// A request that has run this long is a long poll, not page work.
-const LONG_POLL: Duration = Duration::from_secs(5);
-
-fn arg_f64(a: &Value, k: &str) -> Option<f64> {
-    a.get(k).and_then(Value::as_f64)
+/// Argument `k`: none when absent or null, an error when `get` rejects it.
+/// A mistyped argument never falls back to its default.
+fn arg<'a, T>(
+    a: &'a Value,
+    k: &str,
+    what: &str,
+    get: impl FnOnce(&'a Value) -> Option<T>,
+) -> Result<Option<T>, String> {
+    match a.get(k) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => get(v)
+            .map(Some)
+            .ok_or_else(|| format!("{k} must be {what}")),
+    }
 }
 
-fn arg_u64(a: &Value, k: &str, default: u64) -> u64 {
-    a.get(k).and_then(Value::as_u64).unwrap_or(default)
+fn arg_u64(a: &Value, k: &str, default: u64) -> Result<u64, String> {
+    Ok(arg(a, k, "a whole number", Value::as_u64)?.unwrap_or(default))
+}
+
+fn arg_ms(a: &Value, k: &str, default: u64) -> Result<Duration, String> {
+    arg_u64(a, k, default).map(Duration::from_millis)
+}
+
+fn arg_bool(a: &Value, k: &str, default: bool) -> Result<bool, String> {
+    Ok(arg(a, k, "true or false", Value::as_bool)?.unwrap_or(default))
+}
+
+fn arg_str<'a>(a: &'a Value, k: &str) -> Result<&'a str, String> {
+    arg(a, k, "a string", Value::as_str)?.ok_or_else(|| format!("{k} is required"))
+}
+
+fn arg_id(a: &Value, k: &str) -> Result<u32, String> {
+    let id = arg(a, k, "a window id", |v| {
+        v.as_u64().and_then(|v| u32::try_from(v).ok())
+    })?;
+    id.ok_or_else(|| format!("{k} is required"))
+}
+
+/// Linux input event codes of the pointer buttons.
+fn arg_button(a: &Value) -> Result<u32, String> {
+    match arg(a, "button", "a string", Value::as_str)? {
+        None | Some("left") => Ok(0x110),
+        Some("right") => Ok(0x111),
+        Some("middle") => Ok(0x112),
+        Some(other) => Err(format!("unknown button {other}")),
+    }
+}
+
+fn window_json(w: &Window) -> Value {
+    json!({ "id": w.id, "pid": w.pid, "app_id": w.app_id, "title": w.title,
+        "x": w.x, "y": w.y, "width": w.width, "height": w.height,
+        "focused": w.focused, "parent": w.parent })
+}
+
+/// How the screen settled after an action.
+#[derive(Debug)]
+struct Settled {
+    ms: f64,
+    timed_out: bool,
+    /// The newest frame, when no change can have followed it.
+    frame: Option<Frame>,
 }
 
 impl Desk {
-    /// Attach to the kiosk's page and start tracking its events.
     pub async fn new(
-        browser: Cdp,
-        downloads: PathBuf,
+        wl: Wl,
+        kiosk: Arc<Kiosk>,
         residency: Option<Arc<Residency>>,
     ) -> Result<Arc<Desk>, String> {
-        let deadline = Instant::now() + Duration::from_secs(15);
-        let page = loop {
-            let targets = browser.targets().await.map_err(|e| e.to_string())?;
-            if let Some(t) = targets.iter().find(|t| t.kind == "page") {
-                break t.id.clone();
-            }
-            if Instant::now() > deadline {
-                return Err("no page target appeared".into());
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        };
-        let events = browser.events();
-        let session = browser.attach(&page).await.map_err(|e| e.to_string())?;
-        session.enable().await.map_err(|e| e.to_string())?;
-        browser
-            .discover_targets()
-            .await
-            .map_err(|e| e.to_string())?;
-        browser
-            .set_download_dir(&downloads.display().to_string())
-            .await
-            .map_err(|e| e.to_string())?;
-        let desk = Arc::new(Desk {
-            browser,
-            page: Mutex::new(session),
-            stack: Mutex::new(Vec::new()),
-            state: Arc::new(Mutex::new(PageState::default())),
-            downloads,
-            busy: tokio::sync::Mutex::new(()),
+        let keymap = Keymap::default();
+        wl.keymap(&keymap.text()).await?;
+        Ok(Arc::new(Desk {
+            wl,
+            kiosk,
+            turn: tokio::sync::Mutex::new(keymap),
             residency,
             thumb: Mutex::new(None),
-        });
-        tokio::spawn(track(Arc::downgrade(&desk), events));
-        Ok(desk)
-    }
-
-    fn page(&self) -> Session {
-        self.page.lock().map(|p| p.clone()).expect("page lock")
+        }))
     }
 
     /// Run one tool. With a residency manager, the kiosk is acquired first
     /// and released once calls stop for the grace period.
     pub async fn call(&self, tool: &str, args: &Value) -> Result<Output, String> {
-        let Some(res) = &self.residency else {
-            let out = self.call_tool(tool, args).await;
-            self.thumb_if_due().await;
-            return out;
+        let woke = match &self.residency {
+            Some(res) => Some(res.acquire().await),
+            None => None,
         };
-        let woke = res.acquire().await;
-        let out = self.call_tool(tool, args).await;
-        self.thumb_if_due().await;
-        res.release_later();
+        let out = {
+            let mut keymap = self.turn.lock().await;
+            let out = self.call_tool(&mut keymap, tool, args).await;
+            self.thumb_if_due().await;
+            out
+        };
+        if let Some(res) = &self.residency {
+            res.release_later();
+        }
         out.map(|mut o| {
-            if woke.woke {
-                o.wake_ms = Some(woke.ms);
-            }
+            o.wake_ms = woke.filter(|w| w.woke).map(|w| w.ms);
             o
         })
     }
@@ -270,432 +312,412 @@ impl Desk {
             t.last = Some(Instant::now());
             t.path.clone()
         };
-        let _turn = self.busy.lock().await;
-        let page = self.page();
-        let Ok(vp) = page.viewport().await else {
+        let Ok(frame) = self.wl.screenshot().await else {
             return;
         };
-        let Ok(data) = page.screenshot(vp, ImageFormat::Jpeg, 50, 0.1).await else {
+        let Ok(png) = encode_png(&shrink(&frame, 10)) else {
             return;
         };
         let tmp = path.with_extension("tmp");
-        if std::fs::write(&tmp, data).is_ok() {
+        let b64 = base64::engine::general_purpose::STANDARD.encode(png);
+        if std::fs::write(&tmp, b64).is_ok() {
             let _ = std::fs::rename(&tmp, &path);
         }
     }
 
-    async fn call_tool(&self, tool: &str, args: &Value) -> Result<Output, String> {
-        let _turn = self.busy.lock().await;
+    async fn call_tool(
+        &self,
+        keymap: &mut Keymap,
+        tool: &str,
+        args: &Value,
+    ) -> Result<Output, String> {
+        self.wl.alive()?;
         let start = Instant::now();
-        let page = self.page();
-        let e = |e: panoptes_cdp::Error| e.to_string();
         match tool {
             "screenshot" => {
-                let format = match args.get("format").and_then(Value::as_str) {
-                    Some("png") => ImageFormat::Png,
-                    None | Some("jpeg") => ImageFormat::Jpeg,
-                    Some(other) => return Err(format!("unknown format {other}")),
-                };
-                let quality = arg_u64(args, "quality", 80).clamp(1, 100) as u8;
-                let scale = arg_f64(args, "scale").unwrap_or(1.0).clamp(0.1, 1.0);
-                let vp = page.viewport().await.map_err(e)?;
-                let cap = Instant::now();
-                let data = page
-                    .screenshot(vp, format, quality, scale)
-                    .await
-                    .map_err(e)?;
-                let capture_ms = ms(cap.elapsed());
-                Ok(Output {
-                    result: json!({
-                        "format": if format == ImageFormat::Png { "png" } else { "jpeg" },
-                        "width": (vp.width * scale).round(), "height": (vp.height * scale).round(),
-                        "bytes": data.len() / 4 * 3,
-                    }),
-                    image: Some((format.mime(), data)),
-                    action_ms: ((ms(start.elapsed()) - capture_ms) * 100.0).round() / 100.0,
-                    capture_ms: Some(capture_ms),
-                    wake_ms: None,
-                })
+                let frame = self.wl.screenshot().await?;
+                let result = json!({ "width": frame.width, "height": frame.height });
+                output(result, Some((frame, start)), start)
             }
+            "windows" => {
+                let w = self.wl.windows();
+                let list: Vec<Value> = w.list.iter().map(window_json).collect();
+                let result = json!({ "xwayland": w.xwayland, "windows": list });
+                output(result, None, start)
+            }
+            _ => {
+                let screenshot = arg_bool(args, "screenshot", true)?;
+                let quiet = arg_ms(args, "quiet_ms", QUIET_MS)?;
+                let limit = arg_ms(args, "settle_ms", SETTLE_MS)?;
+
+                let before = self.wl.windows();
+                let mut result = self.act(keymap, tool, args, &before).await?;
+                let settled = self.settle(quiet, limit).await?;
+                self.report(&mut result, &settled, &before);
+
+                let shot = Instant::now();
+                let frame = match (screenshot, settled.frame) {
+                    (false, _) => None,
+                    (true, Some(f)) => Some(f),
+                    (true, None) => Some(self.wl.screenshot().await?),
+                };
+                output(result, frame.map(|f| (f, shot)), start)
+            }
+        }
+    }
+
+    /// Do what an acting tool asks; return its own result fields.
+    async fn act(
+        &self,
+        keymap: &mut Keymap,
+        tool: &str,
+        args: &Value,
+        before: &Windows,
+    ) -> Result<Value, String> {
+        let wl = &self.wl;
+        match tool {
             "click" => {
-                let (x, y) = match args.get("node_id").and_then(Value::as_i64) {
-                    Some(node) => {
-                        page.scroll_into_view(node).await.map_err(e)?;
-                        page.node_center(node).await.map_err(e)?
-                    }
-                    None => (
-                        arg_f64(args, "x").ok_or("click needs x and y, or node_id")?,
-                        arg_f64(args, "y").ok_or("click needs x and y, or node_id")?,
-                    ),
-                };
-                let button = args.get("button").and_then(Value::as_str).unwrap_or("left");
-                let count = arg_u64(args, "count", 1).clamp(1, 3) as u32;
-                page.mouse(MouseKind::Moved, x, y, button, 0, (0.0, 0.0))
-                    .await
-                    .map_err(e)?;
-                for n in 1..=count {
-                    page.mouse(MouseKind::Pressed, x, y, button, n, (0.0, 0.0))
-                        .await
-                        .map_err(e)?;
-                    page.mouse(MouseKind::Released, x, y, button, n, (0.0, 0.0))
-                        .await
-                        .map_err(e)?;
+                let (x, y) = self.point(args, "x", "y")?;
+                let button = arg_button(args)?;
+                let count = arg_u64(args, "count", 1)?.clamp(1, 3);
+                wl.motion(x, y);
+                for _ in 0..count {
+                    wl.button(button, true);
+                    wl.button(button, false);
                 }
-                Ok(Output::json(
-                    json!({ "x": x.round(), "y": y.round() }),
-                    start,
-                ))
+                wl.flush()?;
             }
-            "type" => {
-                let text = args
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .ok_or("type needs text")?;
-                if let Some(node) = args.get("node_id").and_then(Value::as_i64) {
-                    page.scroll_into_view(node).await.map_err(e)?;
-                    page.focus(node).await.map_err(e)?;
+            "move" => {
+                let (x, y) = self.point(args, "x", "y")?;
+                wl.motion(x, y);
+                wl.flush()?;
+            }
+            "drag" => {
+                let (x, y) = self.point(args, "x", "y")?;
+                let (to_x, to_y) = self.point(args, "to_x", "to_y")?;
+                let button = arg_button(args)?;
+                // Toolkits start a drag on motion after the press, so move
+                // in steps, at about a frame each.
+                const STEPS: u32 = 10;
+                wl.motion(x, y);
+                wl.button(button, true);
+                wl.flush()?;
+                for i in 1..=STEPS {
+                    tokio::time::sleep(Duration::from_millis(16)).await;
+                    let lerp = |a: u32, b: u32| {
+                        (f64::from(a)
+                            + (f64::from(b) - f64::from(a)) * f64::from(i) / f64::from(STEPS))
+                        .round() as u32
+                    };
+                    wl.motion(lerp(x, to_x), lerp(y, to_y));
+                    wl.flush()?;
                 }
-                page.insert_text(text).await.map_err(e)?;
-                Ok(Output::json(
-                    json!({ "chars": text.chars().count() }),
-                    start,
-                ))
-            }
-            "key" => {
-                let spec = args
-                    .get("key")
-                    .and_then(Value::as_str)
-                    .ok_or("key needs key")?;
-                let [down, up] = keys::press(spec)?;
-                page.key_event(down).await.map_err(e)?;
-                page.key_event(up).await.map_err(e)?;
-                Ok(Output::json(json!({ "key": spec }), start))
+                wl.button(button, false);
+                wl.flush()?;
             }
             "scroll" => {
-                let vp = page.viewport().await.map_err(e)?;
-                let x = arg_f64(args, "x").unwrap_or(vp.width / 2.0);
-                let y = arg_f64(args, "y").unwrap_or(vp.height / 2.0);
-                let dx = arg_f64(args, "dx").unwrap_or(0.0);
-                let dy = arg_f64(args, "dy").unwrap_or(300.0);
-                page.mouse(MouseKind::Wheel, x, y, "none", 0, (dx, dy))
-                    .await
-                    .map_err(e)?;
-                Ok(Output::json(json!({ "dx": dx, "dy": dy }), start))
-            }
-            "navigate" => {
-                let url = args
-                    .get("url")
-                    .and_then(Value::as_str)
-                    .ok_or("navigate needs url")?;
-                let timeout = Duration::from_millis(arg_u64(args, "timeout_ms", 15_000));
-                let loader = match page.navigate(url).await.map_err(e)? {
-                    Ok(l) => l,
-                    Err(text) => return Err(format!("navigation failed: {text}")),
+                let (x, y) = self.point(args, "x", "y")?;
+                let notches = |k: &str, default: i32| {
+                    let n = arg(args, k, "a whole number of notches", |v| {
+                        v.as_i64().and_then(|n| i32::try_from(n).ok())
+                    })?;
+                    Ok::<_, String>(n.unwrap_or(default))
                 };
-                let loaded = self.wait_lifecycle(&loader, "load", timeout).await;
-                Ok(Output::json(json!({ "url": url, "loaded": loaded }), start))
+                let (dx, dy) = (notches("dx", 0)?, notches("dy", SCROLL_NOTCHES)?);
+                wl.motion(x, y);
+                wl.wheel(dx, dy);
+                wl.flush()?;
             }
-            "ax_tree" => {
-                let max = arg_u64(args, "max_bytes", 24_000) as usize;
-                let (nodes, boxes) = tokio::join!(page.ax_tree(), page.layout_boxes());
-                let nodes = nodes.map_err(e)?;
-                let boxes = boxes.unwrap_or_default();
-                let r = axtext::render(&nodes, &boxes, max);
-                Ok(Output::json(
-                    json!({ "tree": r.text, "nodes": r.nodes, "truncated": r.truncated }),
-                    start,
-                ))
+            "key" => {
+                let events = keymap.chord(arg_str(args, "key")?)?;
+                wl.keys(&events);
+                wl.flush()?;
             }
-            "wait_settled" => {
-                let quiet = Duration::from_millis(arg_u64(args, "quiet_ms", 300));
-                let timeout = Duration::from_millis(arg_u64(args, "timeout_ms", 5000));
-                let r = self.wait_settled(&page, quiet, timeout).await;
-                Ok(Output::json(r, start))
-            }
-            "download_list" => {
-                let mut files = Vec::new();
-                if let Ok(rd) = std::fs::read_dir(&self.downloads) {
-                    for ent in rd.flatten() {
-                        let name = ent.file_name().to_string_lossy().into_owned();
-                        let size = ent.metadata().map(|m| m.len()).unwrap_or(0);
-                        files.push(json!({
-                            "name": name, "bytes": size,
-                            "complete": !name.ends_with(".crdownload"),
-                        }));
+            "type" => {
+                for step in keymap.type_text(arg_str(args, "text")?)? {
+                    match step {
+                        Step::Keymap(text) => wl.keymap(&text).await?,
+                        Step::Keys(events) => {
+                            // A sync per chunk keeps long text from
+                            // overrunning the socket.
+                            for chunk in events.chunks(256) {
+                                wl.keys(chunk);
+                                wl.sync().await?;
+                            }
+                        }
                     }
                 }
-                files.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
-                let active: Vec<Value> = self
-                    .state
-                    .lock()
-                    .map(|s| s.downloads.values().cloned().collect())
-                    .unwrap_or_default();
-                Ok(Output::json(
-                    json!({ "dir": self.downloads, "files": files, "events": active }),
-                    start,
-                ))
             }
-            "upload" => {
-                let path = args
-                    .get("path")
-                    .and_then(Value::as_str)
-                    .ok_or("upload needs path")?;
-                let file = self.download_path(path)?;
-                let target = match args.get("node_id").and_then(Value::as_i64) {
-                    Some(node) => FileInput::Node(node),
-                    None => FileInput::Selector(
-                        args.get("selector")
-                            .and_then(Value::as_str)
-                            .unwrap_or("input[type=file]"),
-                    ),
-                };
-                page.set_file_input(target, std::slice::from_ref(&file))
-                    .await
-                    .map_err(e)?;
-                Ok(Output::json(json!({ "file": file }), start))
-            }
-            "read_pdf" => {
-                let path = args
-                    .get("path")
-                    .and_then(Value::as_str)
-                    .ok_or("read_pdf needs path")?;
-                let file = self.download_path(path)?;
-                let max = arg_u64(args, "max_bytes", 8000) as usize;
-                let bin =
-                    std::env::var("PANOPTES_PDFTOTEXT").unwrap_or_else(|_| "pdftotext".into());
-                let run = tokio::process::Command::new(&bin)
-                    .args(["-layout", &file, "-"])
-                    .kill_on_drop(true)
-                    .output();
-                let out = tokio::time::timeout(Duration::from_secs(10), run)
-                    .await
-                    .map_err(|_| format!("{bin}: timed out after 10 s"))?
-                    .map_err(|err| format!("{bin}: {err}"))?;
-                if !out.status.success() {
-                    let msg = String::from_utf8_lossy(&out.stderr);
-                    return Err(format!("{bin}: {}: {}", out.status, msg.trim()));
-                }
-                let text = String::from_utf8_lossy(&out.stdout);
-                let mut cut = text.len().min(max);
-                while !text.is_char_boundary(cut) {
-                    cut -= 1;
-                }
-                Ok(Output::json(
-                    json!({ "file": file, "text": &text[..cut], "truncated": cut < text.len() }),
-                    start,
-                ))
-            }
-            "reload" => {
-                let timeout = Duration::from_millis(arg_u64(args, "timeout_ms", 15_000));
-                // Page.reload returns no loader id: wait for a loader other
-                // than the current one to reach load.
-                let old = self
-                    .state
-                    .lock()
-                    .map(|s| s.loader.clone())
-                    .unwrap_or_default();
-                page.reload().await.map_err(e)?;
-                let deadline = Instant::now() + timeout;
-                let mut loaded = false;
-                while Instant::now() < deadline {
-                    loaded = self
-                        .state
-                        .lock()
-                        .map(|s| s.loader != old && s.lifecycle.iter().any(|l| l == "load"))
-                        .unwrap_or(false);
-                    if loaded {
-                        break;
+            "launch" => return self.launch(args, before).await,
+            "focus" => wl.activate(arg_id(args, "window")?)?,
+            "close" => wl.close(arg_id(args, "window")?)?,
+            "kill" => {
+                let pid = match (args.get("window"), args.get("pid")) {
+                    (Some(_), None) => {
+                        let id = arg_id(args, "window")?;
+                        let w = before.list.iter().find(|w| w.id == id);
+                        let pid = w.ok_or_else(|| format!("no window {id}"))?.pid;
+                        u32::try_from(pid)
+                            .ok()
+                            .filter(|&p| p > 0)
+                            .ok_or_else(|| format!("window {id} has no known pid"))?
                     }
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
-                Ok(Output::json(json!({ "loaded": loaded }), start))
+                    (None, Some(p)) => p
+                        .as_u64()
+                        .and_then(|p| u32::try_from(p).ok())
+                        .ok_or("pid must be a process id")?,
+                    _ => return Err("kill takes a window or a pid".into()),
+                };
+                self.kiosk.kill(pid)?;
+                return Ok(json!({ "pid": pid }));
             }
-            other => Err(format!("unknown tool {other}")),
+            "wait" => return self.wait(args).await,
+            other => return Err(format!("unknown tool {other}")),
         }
+        Ok(json!({}))
     }
 
-    /// `p` resolved inside the download directory; anything that escapes it
-    /// (`..`, absolute paths, symlinks out) is refused.
-    fn download_path(&self, p: &str) -> Result<String, String> {
-        let root = self
-            .downloads
-            .canonicalize()
-            .map_err(|err| format!("download dir: {err}"))?;
-        let file = root
-            .join(p)
-            .canonicalize()
-            .map_err(|err| format!("{p}: {err}"))?;
-        if !file.starts_with(&root) || !file.is_file() {
-            return Err(format!("{p} is not a file in {}", root.display()));
-        }
-        Ok(file.display().to_string())
-    }
-
-    async fn wait_lifecycle(&self, loader: &str, name: &str, timeout: Duration) -> bool {
-        let deadline = Instant::now() + timeout;
-        while Instant::now() < deadline {
-            let done = self
-                .state
-                .lock()
-                .map(|s| s.loader == loader && s.lifecycle.iter().any(|l| l == name))
-                .unwrap_or(false);
-            if done {
-                return true;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        false
-    }
-
-    /// Settled: document complete, no request younger than [`LONG_POLL`]
-    /// in flight, and the same layout signature for `quiet`. The reply says
-    /// how long the network held it and, unsettled, which requests.
-    async fn wait_settled(&self, page: &Session, quiet: Duration, timeout: Duration) -> Value {
-        const SIG: &str = "document.readyState + ':' + document.getElementsByTagName('*').length \
-            + ':' + (document.body ? document.body.innerText.length : 0) + ':' \
-            + document.documentElement.scrollHeight";
-        let start = Instant::now();
-        let mut last = Value::Null;
-        let mut stable_since = Instant::now();
-        let mut network = Duration::ZERO;
-        let mut held: Vec<String> = Vec::new();
-        while start.elapsed() < timeout {
-            let mut pending: Vec<String> = self
-                .state
-                .lock()
-                .map(|s| {
-                    s.inflight
-                        .values()
-                        .filter(|(t, _, _)| t.elapsed() < LONG_POLL)
-                        .map(|(_, _, url)| url.clone())
-                        .collect()
-                })
-                .unwrap_or_default();
-            let busy = !pending.is_empty();
-            if busy {
-                pending.truncate(8);
-                held = pending;
-            }
-            let tick = Instant::now();
-            let sig = page.evaluate(SIG).await.unwrap_or(Value::Null);
-            let complete = sig.as_str().is_some_and(|s| s.starts_with("complete:"));
-            if sig != last || busy || !complete {
-                last = sig;
-                stable_since = Instant::now();
-            } else if stable_since.elapsed() >= quiet {
-                return json!({ "settled": true, "network_ms": ms(network), "held_by": held });
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            if busy {
-                network += tick.elapsed();
-            }
-        }
-        json!({ "settled": false, "network_ms": ms(network), "held_by": held,
-            "layout": last })
-    }
-
-    /// Follow a page the current one opened, such as a link with
-    /// `target=_blank`.
-    async fn adopt(&self, target_id: &str) {
-        let Ok(s) = self.browser.attach(target_id).await else {
-            return;
-        };
-        if s.enable().await.is_err() {
-            return;
-        }
-        if let (Ok(mut page), Ok(mut stack)) = (self.page.lock(), self.stack.lock()) {
-            stack.push(std::mem::replace(&mut *page, s));
-        }
-        if let Ok(mut st) = self.state.lock() {
-            *st = PageState {
-                downloads: std::mem::take(&mut st.downloads),
-                ..PageState::default()
-            };
-        }
-    }
-
-    /// Return to the opener when the current page closes.
-    fn drop_target(&self, target_id: &str) {
-        if let (Ok(mut page), Ok(mut stack)) = (self.page.lock(), self.stack.lock()) {
-            if page.target_id() == target_id {
-                if let Some(prev) = stack.pop() {
-                    *page = prev;
-                }
+    /// A screen point from two arguments, checked against the output.
+    fn point(&self, args: &Value, kx: &str, ky: &str) -> Result<(u32, u32), String> {
+        let (w, h) = self.wl.size();
+        let coord = |k: &str, max: u32| {
+            let v = args.get(k).and_then(Value::as_f64);
+            let v = v.ok_or_else(|| format!("{k} must be a number"))?.round();
+            if (0.0..f64::from(max)).contains(&v) {
+                Ok(v as u32)
             } else {
-                stack.retain(|s| s.target_id() != target_id);
+                Err(format!("{k}={v} is off the {w}x{h} screen"))
+            }
+        };
+        Ok((coord(kx, w)?, coord(ky, h)?))
+    }
+
+    /// Start a program and wait for a new window, its exit, or the timeout.
+    async fn launch(&self, args: &Value, before: &Windows) -> Result<Value, String> {
+        let argv: Vec<String> = args
+            .get("argv")
+            .and_then(Value::as_array)
+            .and_then(|a| a.iter().map(|s| s.as_str().map(str::to_owned)).collect())
+            .filter(|a: &Vec<String>| !a.is_empty())
+            .ok_or("argv must be a non-empty array of strings")?;
+        let env: Vec<(String, String)> = match args.get("env") {
+            None => Vec::new(),
+            Some(Value::Object(m)) => m
+                .iter()
+                .map(|(k, v)| match v.as_str() {
+                    Some(v) => Ok((k.clone(), v.to_owned())),
+                    None => Err(format!("env.{k} must be a string")),
+                })
+                .collect::<Result<_, _>>()?,
+            Some(_) => return Err("env must be an object of strings".into()),
+        };
+        let timeout = arg_ms(args, "timeout_ms", TIMEOUT_MS)?;
+
+        let mut changes = self.wl.window_changes();
+        let (child, log) = self.kiosk.launch(&argv, &env, before.xwayland.as_deref())?;
+        let pid = child.pid();
+        let (exit_tx, mut exit_rx) = tokio::sync::oneshot::channel();
+        tokio::task::spawn_blocking(move || {
+            let _ = exit_tx.send(child.wait());
+        });
+
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut exited = false;
+        loop {
+            let opened = self
+                .wl
+                .windows()
+                .list
+                .iter()
+                .any(|w| !before.list.iter().any(|b| b.id == w.id));
+            if opened {
+                break;
+            }
+            tokio::select! {
+                _ = changes.changed() => {}
+                status = &mut exit_rx, if !exited => {
+                    exited = true;
+                    let status = status.ok().and_then(Result::ok);
+                    // A launcher may exit cleanly once its app is up.
+                    if status != Some(0) {
+                        return Err(format!(
+                            "{} exited ({}) before opening a window; {}:\n{}",
+                            argv[0],
+                            describe_status(status),
+                            log.display(),
+                            tail(&log, 20),
+                        ));
+                    }
+                }
+                _ = tokio::time::sleep_until(deadline) => break,
+            }
+        }
+        Ok(json!({ "pid": pid }))
+    }
+
+    /// Wait until a window matches the filters (or, with closed, none
+    /// does), or the timeout.
+    async fn wait(&self, args: &Value) -> Result<Value, String> {
+        let app_id = arg(args, "app_id", "a string", Value::as_str)?;
+        let title = arg(args, "title", "a string", Value::as_str)?;
+        let pid = arg(args, "pid", "a whole number", Value::as_i64)?;
+        let closed = arg_bool(args, "closed", false)?;
+        let timeout = arg_ms(args, "timeout_ms", TIMEOUT_MS)?;
+        if app_id.is_none() && title.is_none() && pid.is_none() {
+            return Ok(json!({}));
+        }
+        let matches = |w: &Window| {
+            app_id.is_none_or(|a| w.app_id == a)
+                && title.is_none_or(|t| w.title.contains(t))
+                && pid.is_none_or(|p| i64::from(w.pid) == p)
+        };
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut changes = self.wl.window_changes();
+        loop {
+            let found = self.wl.windows().list.into_iter().find(|w| matches(w));
+            let met = found.is_some() != closed;
+            if met {
+                return Ok(json!({ "met": true, "window": found.as_ref().map(window_json) }));
+            }
+            tokio::select! {
+                _ = changes.changed() => {}
+                _ = tokio::time::sleep_until(deadline) => {
+                    return Ok(json!({ "met": false, "window": found.as_ref().map(window_json) }));
+                }
+            }
+            self.wl.alive()?;
+        }
+    }
+
+    /// Add how the screen settled and the window changes since `before` to
+    /// an acting tool's result.
+    fn report(&self, result: &mut Value, settled: &Settled, before: &Windows) {
+        let now = self.wl.windows();
+        let opened: Vec<Value> = now
+            .list
+            .iter()
+            .filter(|w| !before.list.iter().any(|b| b.id == w.id))
+            .map(window_json)
+            .collect();
+        let closed: Vec<u32> = before
+            .list
+            .iter()
+            .filter(|b| !now.list.iter().any(|w| w.id == b.id))
+            .map(|b| b.id)
+            .collect();
+        let focused = now.list.iter().find(|w| w.focused).map(|w| w.id);
+        result["settled_ms"] = json!(settled.ms);
+        result["timed_out"] = json!(settled.timed_out);
+        result["windows"] = json!({ "opened": opened, "closed": closed, "focused": focused });
+    }
+
+    /// Wait until no frame changes the screen for `quiet`, at most `limit`.
+    async fn settle(&self, quiet: Duration, limit: Duration) -> Result<Settled, String> {
+        let start = Instant::now();
+        let mut last = None;
+        loop {
+            let left = limit.saturating_sub(start.elapsed());
+            let window = quiet.min(left);
+            match self.wl.next_change(window).await? {
+                Some(frame) => last = Some(frame),
+                // A full quiet window passed without a change, so the last
+                // changed frame is still what the screen shows.
+                None if window == quiet => {
+                    return Ok(Settled {
+                        ms: ms(start.elapsed()),
+                        timed_out: false,
+                        frame: last,
+                    });
+                }
+                None => {}
+            }
+            if start.elapsed() >= limit {
+                return Ok(Settled {
+                    ms: ms(start.elapsed()),
+                    timed_out: true,
+                    frame: None,
+                });
             }
         }
     }
 }
 
-async fn track(desk: std::sync::Weak<Desk>, mut events: tokio::sync::broadcast::Receiver<Event>) {
-    loop {
-        let ev = match events.recv().await {
-            Ok(ev) => ev,
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-            Err(_) => return,
-        };
-        let Some(desk) = desk.upgrade() else { return };
-        let (current, main_frame) = {
-            let page = desk.page();
-            (page.id().to_owned(), page.target_id().to_owned())
-        };
-        let p = &ev.params;
-        match ev.method.as_str() {
-            "Target.targetCreated" => {
-                let info = &p["targetInfo"];
-                let opened_here = info["openerId"].as_str() == Some(desk.page().target_id());
-                if info["type"] == "page" && opened_here {
-                    if let Some(id) = info["targetId"].as_str() {
-                        desk.adopt(id).await;
+/// A tool's output. `shot` is the screen and when taking it began; the
+/// action is everything before that.
+fn output(result: Value, shot: Option<(Frame, Instant)>, start: Instant) -> Result<Output, String> {
+    let Some((frame, taken)) = shot else {
+        return Ok(Output {
+            result,
+            png: None,
+            action_ms: ms(start.elapsed()),
+            capture_ms: None,
+            wake_ms: None,
+        });
+    };
+    let png = encode_png(&frame)?;
+    Ok(Output {
+        result,
+        png: Some(base64::engine::general_purpose::STANDARD.encode(png)),
+        action_ms: ms(taken.duration_since(start)),
+        capture_ms: Some(ms(taken.elapsed())),
+        wake_ms: None,
+    })
+}
+
+fn encode_png(frame: &Frame) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let mut enc = png::Encoder::new(&mut out, frame.width, frame.height);
+    enc.set_color(png::ColorType::Rgb);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.set_compression(png::Compression::Fast);
+    let mut w = enc.write_header().map_err(|e| format!("png: {e}"))?;
+    w.write_image_data(&frame.rgb)
+        .map_err(|e| format!("png: {e}"))?;
+    w.finish().map_err(|e| format!("png: {e}"))?;
+    Ok(out)
+}
+
+/// Average `factor` x `factor` blocks into one pixel.
+fn shrink(frame: &Frame, factor: u32) -> Frame {
+    let (w, h) = (
+        (frame.width / factor).max(1),
+        (frame.height / factor).max(1),
+    );
+    let f = factor as usize;
+    let mut rgb = Vec::with_capacity(w as usize * h as usize * 3);
+    for ty in 0..h as usize {
+        for tx in 0..w as usize {
+            let mut sum = [0u32; 3];
+            for y in ty * f..((ty + 1) * f).min(frame.height as usize) {
+                for x in tx * f..((tx + 1) * f).min(frame.width as usize) {
+                    let i = (y * frame.width as usize + x) * 3;
+                    for (s, &v) in sum.iter_mut().zip(&frame.rgb[i..i + 3]) {
+                        *s += u32::from(v);
                     }
                 }
             }
-            "Target.targetDestroyed" => {
-                if let Some(id) = p["targetId"].as_str() {
-                    desk.drop_target(id);
-                }
-            }
-            "Browser.downloadWillBegin" | "Browser.downloadProgress" => {
-                if let (Some(guid), Ok(mut st)) = (p["guid"].as_str(), desk.state.lock()) {
-                    let entry = st
-                        .downloads
-                        .entry(guid.to_owned())
-                        .or_insert_with(|| json!({}));
-                    for (k, v) in p.as_object().into_iter().flatten() {
-                        entry[k] = v.clone();
-                    }
-                }
-            }
-            _ if ev.session.as_deref() != Some(current.as_str()) => {}
-            // A page target's main frame shares its id.
-            "Page.lifecycleEvent" if p["frameId"].as_str() == Some(main_frame.as_str()) => {
-                if let Ok(mut st) = desk.state.lock() {
-                    let loader = p["loaderId"].as_str().unwrap_or_default();
-                    let name = p["name"].as_str().unwrap_or_default().to_owned();
-                    if name == "init" || st.loader != loader {
-                        st.loader = loader.to_owned();
-                        st.lifecycle.clear();
-                        // The old document's requests never finish.
-                        st.inflight.retain(|_, (_, l, _)| l == loader);
-                    }
-                    st.lifecycle.push(name);
-                }
-            }
-            "Network.requestWillBeSent" => {
-                if let (Some(id), Ok(mut st)) = (p["requestId"].as_str(), desk.state.lock()) {
-                    let url = p["request"]["url"].as_str().unwrap_or_default();
-                    let loader = p["loaderId"].as_str().unwrap_or_default().to_owned();
-                    st.inflight
-                        .insert(id.to_owned(), (Instant::now(), loader, clip_url(url)));
-                }
-            }
-            "Network.loadingFinished" | "Network.loadingFailed" => {
-                if let (Some(id), Ok(mut st)) = (p["requestId"].as_str(), desk.state.lock()) {
-                    st.inflight.remove(id);
-                }
-            }
-            _ => {}
+            let n = (f * f) as u32;
+            rgb.extend(sum.map(|s| (s / n) as u8));
         }
     }
+    Frame {
+        width: w,
+        height: h,
+        rgb,
+    }
+}
+
+fn describe_status(status: Option<i32>) -> String {
+    match status {
+        None => "status unknown".into(),
+        Some(s) if s & 0x7f == 0 => format!("exit code {}", (s >> 8) & 0xff),
+        Some(s) => format!("signal {}", s & 0x7f),
+    }
+}
+
+/// The last `n` lines of a log.
+fn tail(path: &Path, n: usize) -> String {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let lines: Vec<&str> = text.lines().collect();
+    lines[lines.len().saturating_sub(n)..].join("\n")
 }
