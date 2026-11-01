@@ -1,10 +1,11 @@
 //! The desk's side of residency: acquire the kiosk from panoptes-resd
-//! before each tool call, and release it once no call has arrived for a
-//! grace period. Every front end goes through `Desk::call`, so freezing
-//! works the same for panoptes-loop and for any MCP harness.
+//! before each tool call, and release it once no call is in flight and
+//! none has started for a grace period. Every front end goes through
+//! `Desk::call`, so freezing works the same for panoptes-loop and for any
+//! MCP harness, including ones that send calls in parallel.
 //!
 //! ```text
-//! call ─> acquire (thaw if frozen) ─> tool ─> reply ─> GRACE ms quiet ─> release (freeze)
+//! call ─> acquire (thaw if frozen) ─> tool ─> reply ─> no call for GRACE ms ─> release (freeze)
 //! ```
 //!
 //! If panoptes-resd cannot be reached, the desk thaws its own kiosk (the
@@ -39,8 +40,12 @@ pub struct Residency {
     socket: PathBuf,
     grace: Duration,
     kiosk: Cgroup,
-    /// Bumped by every call; a pending release fires only if it is
-    /// unchanged.
+    /// Calls between their acquire and their `release_later`. A release
+    /// never fires while one is in flight.
+    active: AtomicU64,
+    /// Bumped by every acquire; a pending release fires only if it is
+    /// unchanged, so a call that starts during the grace period restarts
+    /// it.
     generation: AtomicU64,
     inner: tokio::sync::Mutex<Inner>,
 }
@@ -60,6 +65,7 @@ impl Residency {
             socket,
             grace,
             kiosk,
+            active: AtomicU64::new(0),
             generation: AtomicU64::new(0),
             inner: tokio::sync::Mutex::default(),
         })
@@ -100,6 +106,7 @@ impl Residency {
 
     /// Make the kiosk runnable before a tool call.
     pub async fn acquire(&self) -> Acquired {
+        self.active.fetch_add(1, Ordering::SeqCst);
         self.generation.fetch_add(1, Ordering::SeqCst);
         let mut inner = self.inner.lock().await;
         if inner.held {
@@ -125,19 +132,21 @@ impl Residency {
         Acquired { ms, woke }
     }
 
-    /// Release the kiosk after the grace period, unless another call comes
-    /// first.
+    /// End a call that `acquire` started. Once no call is in flight and
+    /// none has started for the grace period, release the kiosk.
     pub fn release_later(self: &Arc<Self>) {
+        let before = self.active.fetch_sub(1, Ordering::SeqCst);
+        debug_assert!(before > 0, "release_later without an acquire");
         let generation = self.generation.load(Ordering::SeqCst);
         let me = self.clone();
         tokio::spawn(async move {
             tokio::time::sleep(me.grace).await;
-            if me.generation.load(Ordering::SeqCst) != generation {
+            if !me.idle_since(generation) {
                 return;
             }
             let mut inner = me.inner.lock().await;
             // A call may have started while this task waited for the lock.
-            if me.generation.load(Ordering::SeqCst) != generation || !inner.held {
+            if !me.idle_since(generation) || !inner.held {
                 return;
             }
             if let Err(e) = me.send(&mut inner, "release").await {
@@ -145,5 +154,98 @@ impl Residency {
             }
             inner.held = false;
         });
+    }
+
+    /// No call is in flight, and none has started since `generation`.
+    fn idle_since(&self, generation: u64) -> bool {
+        self.active.load(Ordering::SeqCst) == 0
+            && self.generation.load(Ordering::SeqCst) == generation
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use tokio::net::UnixListener;
+
+    const GRACE: Duration = Duration::from_millis(200);
+    /// Long enough for any pending release to have fired.
+    const SETTLE: Duration = Duration::from_millis(600);
+
+    /// A stand-in panoptes-resd that records each op and agrees to it, and a
+    /// kiosk directory that `Cgroup::open` accepts.
+    async fn fake_resd(name: &str) -> (Arc<Residency>, Arc<Mutex<Vec<String>>>, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("panoptes-desk-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("cgroup.procs"), "").unwrap();
+        let socket = dir.join("resd.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let ops = Arc::new(Mutex::new(Vec::new()));
+        let seen = ops.clone();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (r, mut w) = stream.into_split();
+            let mut lines = BufReader::new(r).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let v: Value = serde_json::from_str(&line).unwrap();
+                seen.lock()
+                    .unwrap()
+                    .push(v["op"].as_str().unwrap().to_owned());
+                w.write_all(b"{\"ok\":true,\"from\":\"acting\"}\n")
+                    .await
+                    .unwrap();
+            }
+        });
+        let kiosk = Cgroup::open(&dir).unwrap();
+        (Residency::new(socket, GRACE, kiosk), ops, dir)
+    }
+
+    fn ops_now(ops: &Mutex<Vec<String>>) -> Vec<String> {
+        ops.lock().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn a_release_waits_for_the_grace_period() {
+        let (res, ops, dir) = fake_resd("grace").await;
+        res.acquire().await;
+        res.release_later();
+        tokio::time::sleep(GRACE / 5).await;
+        assert_eq!(ops_now(&ops), ["acquire"]);
+        tokio::time::sleep(SETTLE).await;
+        assert_eq!(ops_now(&ops), ["acquire", "release"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn overlapping_calls_keep_the_kiosk_until_the_last_ends() {
+        let (res, ops, dir) = fake_resd("overlap").await;
+        // A and B are both in flight; A ends first.
+        res.acquire().await;
+        res.acquire().await;
+        res.release_later();
+        tokio::time::sleep(SETTLE).await;
+        assert_eq!(ops_now(&ops), ["acquire"], "released while B was in flight");
+        res.release_later();
+        tokio::time::sleep(SETTLE).await;
+        assert_eq!(ops_now(&ops), ["acquire", "release"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_call_during_the_grace_period_restarts_it() {
+        let (res, ops, dir) = fake_resd("restart").await;
+        res.acquire().await;
+        res.release_later();
+        tokio::time::sleep(GRACE / 2).await;
+        res.acquire().await;
+        res.release_later();
+        // The first release's timer has passed, but B started after it.
+        tokio::time::sleep(GRACE * 3 / 4).await;
+        assert_eq!(ops_now(&ops), ["acquire"]);
+        tokio::time::sleep(SETTLE).await;
+        assert_eq!(ops_now(&ops), ["acquire", "release"]);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
