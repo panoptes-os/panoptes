@@ -3,30 +3,37 @@
 These notes come from one research and test run on 2026-10-26, on a
 32-thread, 125 GiB server with an RTX 3090. They cover each agent's
 desktop, what an agent container is and what schedules it, and where
-kernel and inference work pays off.
+kernel and inference work pays off. They describe the earlier desk, which
+drove Chromium over CDP; since 2026-10-30 the desk drives any program over
+Wayland ([decisions.md](decisions.md)).
 
 | Doc | Question | Answer |
 |---|---|---|
 | [desktop.md](desktop.md) | Which compositor, browser, and screen size, and how agents drive them | One Cage per agent, a trimmed Chromium frozen between steps, 1280x720 at scale 1, and panoptes-desk serving its tools over MCP. Superseded in part on 2026-10-30: any program, 1024x768, driven over Wayland |
-| [scheduler.md](scheduler.md) | What an agent container is, and what schedules it | A cgroup tree. A residency manager on each host parks idle kiosks; Kubernetes cannot |
-| [kernel-and-inference.md](kernel-and-inference.md) | Where kernel and inference work pays | Memory parking pays, network work does not, and the GPU sets local density |
+| [scheduler.md](scheduler.md) | What an agent container is, and what schedules it | A cgroup tree. A residency manager on each host parks idle kiosks; Kubernetes cannot. Historical: the unit layout is not what Panoptes builds |
+| [kernel-and-inference.md](kernel-and-inference.md) | Where kernel and inference work pays | Memory parking pays, network work does not, and the GPU sets local density. Historical: written while a model step took seconds; see the section below |
 | [decisions.md](decisions.md) | What was decided on 2026-10-27 and 2026-10-30 | Panoptes: an AGPL engine in a Docker image built with Nix, its own agent loop, and MCP for other harnesses. Since 2026-10-30, a harness for any Linux GUI program on a Cage fork at 1024x768 |
 | [measurements.md](measurements.md) | How each number was taken | Machine, versions, methods, caveats |
 
 ## Since 2026-10-31, the harness is the cost
 
-These notes were measured while a model step took seconds, and four
-findings below lean on that. Since 2026-10-31, [vision.md](../vision.md)
-sets the rule: treat a model call as free and instant, and count harness
-time per step as the cost. The harness's median step on the earlier desk
-was 660 ms.
+These notes were measured with Chromium, while a model step took seconds,
+and several findings below lean on that. Since 2026-10-31,
+[vision.md](../vision.md) sets the rule: treat a model call as free and
+instant, and count harness time per step as the cost. The harness's median
+step on the earlier desk was 660 ms, with a text model reading Chromium's
+accessibility tree.
 
 | Finding | Under that rule |
 |---|---|
+| 1. The browser is what an agent costs | True of Chromium. Panoptes now runs any program; other programs were measured only in stock Cage (E14), not on the Wayland desk |
+| 2. Chromium flags | Applies only when the agent's program is Chromium |
+| 3. About 700 running agents | Arithmetic from 64 agents (E1c), and a residency number. Throughput is the measure; see vision.md |
 | 4. Parking | Still pays, for waits that are not the model: a person, a slow backend, a quota. Waking costs 40 to 75 ms, 6 to 11 percent of a 660 ms step |
 | 9. The network | It compared against a model step of seconds. A new 22 to 51 ms TLS connection is 3 to 8 percent of a 660 ms step, so reusing connections matters more |
 | 10. The GPU | It describes one local model on one GPU: how fast that model runs, not what limits Panoptes |
 | 12. Freezing between steps | It assumed seconds between steps. With a fast model little gap is left to save CPU in, and a frozen kiosk's next capture took 9 to 16 ms longer |
+| 13. A shared browser | Applies only to agents that all use one browser |
 
 ## Findings
 

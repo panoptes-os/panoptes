@@ -5,6 +5,11 @@
 A high-performance harness and orchestrator for graphical AI agents on
 Linux.
 
+> **Heavily a work in progress.** This README is a placeholder until v0.
+> Its numbers come from the invoice demo on the earlier Chromium desk, not
+> from the current Wayland desk. [docs/one-pager.md](docs/one-pager.md)
+> says how each was measured.
+
 Each agent gets its own Linux desktop: our fork of the Cage compositor at
 1024x768, running whatever programs the agent launches, Wayland or X11.
 We design Panoptes for fast models. We treat a model call as free and

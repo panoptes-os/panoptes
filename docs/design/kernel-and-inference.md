@@ -1,5 +1,10 @@
 # Kernel and inference: memory is the lever, the network is not
 
+Status: historical. Written while a model step took seconds. Since
+2026-10-31 the rule is to treat a model call as free and instant
+([vision.md](../vision.md)), so the inference sections describe the
+model, not what limits Panoptes.
+
 Research notes, 2026-10-26: where kernel scheduling, network I/O, and
 local inference can raise agent density.
 Numbers come from the test server, described in

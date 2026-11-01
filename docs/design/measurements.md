@@ -1,13 +1,14 @@
-# Measurements: methods for the 2026-10-26 runs
+# Measurements: methods
 
-Status: record of runs on 2026-10-26. The design docs cite these results;
-this file says how each number was taken and how to take it again. The
-runs predate the name Panoptes, so unit and path names below keep the old
-name, glarb.
+Status: record of runs from 2026-10-26 to 2026-10-28, all on the earlier
+desk, which drove Chromium over the Chrome DevTools Protocol. The design
+docs, the one-pager and the vision cite these results; this file says how
+each number was taken. The first runs predate the name Panoptes, so unit
+and path names below keep the old name, glarb.
 
 ## Machine
 
-`user@10.30.234.90`, bare metal:
+One bare-metal server:
 
 | Part | Value |
 |---|---|
@@ -17,9 +18,6 @@ name, glarb.
 | OS | Gentoo, kernel 6.12.58-gentoo-dist, systemd 260.1 |
 | Memory settings | zswap on (zbud, lz4, 20% pool), MGLRU on, KSM off, swappiness 60 |
 | Kernel config | BPF LSM, PSI, memcg, checkpoint/restore, io_uring; no sched_ext, no BTF |
-
-It matches the rig's reported shape (32 threads, 128 GB). Whether it is
-the rig is an open question for the user.
 
 Software came from the nixpkgs revision that this repository's
 `flake.lock` pins (`3ec6363`), except vLLM, which came from PyPI:
@@ -93,6 +91,7 @@ unless the experiment says otherwise.
 | E10 | page work between agent steps | 8 agents on one page, proc flags: a 20 Hz timer page, the E8 spinner, Greenhouse, Workday, CNN. CPU of the agents' units over 30 s: visible at 60, 10, and 2 Hz; hidden by minimizing the window through CDP; hidden by a CDP freeze and resume. Then 60 s of round-robin steps, one per agent about every 4 s (capture, scroll 300 px and wait two frames, 300 ms, capture), with the page visible throughout or shown only for its step. A 10 px capture of an overlay, against visible references, checks that hidden captures are fresh | 1 |
 | E10b | idling a page between steps | E10's steps, 60 s per mode: output at 60 Hz throughout, at 2 Hz throughout, at 2 Hz between an agent's steps and 60 Hz during them, and the agent's unit frozen between its steps and thawed for each, in that order, and again in reverse for Workday and Greenhouse. Timings include the connection and page session. A probe of one agent records 20 s each of visible, cycles of 3.5 s frozen and 0.5 s thawed, and frozen, with CPU per thread name | 1 |
 | E11 | parking one agent inside a shared browser | one headless Chromium, proc flags and the hang monitor off, holding N = 8 and 32 agents as BrowserContexts, pages rotating. systemd's `DelegateSubgroup` starts the browser in a leaf cgroup, and a root watcher moves each agent's new renderers into a sibling cgroup. Park agent 1: clear its context's HTTP cache, freeze its cgroup, reclaim into zswap (zsmalloc, zstd, writeback off), page out its renderers' remaining private memory with `process_madvise`, hold 20 s, thaw, and time the first CDP call and screenshot; another agent's screenshot is timed during the hold. Then freeze agent 2 alone for 180 s | 1 |
+| E14 | native apps alone in Cage | One app (KiCad, Blender, LibreOffice Calc, LTspice under Wine) alone in stock Cage 0.3.1, in a delegated transient unit, driven by grim, wayvnc and AT-SPI scripts rather than panoptes-desk or resd. Memory and idle CPU once settled, capture and virtual input times, the AT-SPI tree, a 20 s freeze, and a park into zswap with writeback off, on the host's zswap settings (zbud, lz4) | 1 |
 
 ## Caveats
 
@@ -139,8 +138,54 @@ unless the experiment says otherwise.
   on Workday, and 109 against 55 on Greenhouse; zsmalloc's grew 2 to 3 MiB
   more than its charge.
 
+## Loop runs, 2026-10-27 and 2026-10-28
+
+panoptes-loop drove one agent per invoice on the earlier desk: Cage and
+Chromium at 1280x800, driven over CDP, each desk in a transient systemd
+unit under panoptes-resd. The model read each page as Chromium's
+accessibility tree, as text, and acted on accessibility nodes. ERPNext and
+the supplier portals ran on the same server. The loop verified each
+invoice by reading it back through ERPNext's REST API.
+
+| Run | Date | Agents | Model | ERP cap | Verified | Wall |
+|---|---|---|---|---|---|---|
+| s20 | 2026-10-27 | 20 | scripted | 25 | 20 of 20 | 59 s |
+| s300 | 2026-10-28 | 300 | scripted | 25 | 300 of 300 | 502 s |
+| s700 | 2026-10-28 | 700 | scripted | 25 | 403 of 700 | 1,354 s |
+| s700b | 2026-10-28 | 700 | scripted | 25 | 700 of 700 | 1,156 s |
+| s700c | 2026-10-28 | 700 | scripted | 50 | 696 of 700 | 817 s |
+
+- The scripted model, panoptes-oracle, answers from the demo's ground
+  truth after 2000 ms, then streams its reply at once.
+- The ERP cap is the loop's limit on agents in the ERPNext part of the task
+  at once. An agent holds its slot until it leaves that part, through its
+  model calls. At most 40 agents act at once in every run.
+- s700 failed on the portal server's open-file limit; s700b is the rerun
+  after the fix ([one-pager](../one-pager.md), Status).
+- Per-step times come from the loop's trace. `action_ms` is the desk calls
+  that act. `settle_ms` is the loop's `wait_settled` call with a 300 ms
+  quiet window, after steps that changed the page. `observe_ms` is the
+  accessibility-tree read. `harness_ms` is step time minus model time, so
+  it also counts the ERP and acting waits; in s20 both were zero.
+
+Real models ran on Baseten's OpenAI-compatible API on 2026-10-28, one
+agent per invoice, on invoices inv-0701 to inv-0715, with the loop's
+walkthrough prompt for the demo:
+
+| Arm | Model | Verified |
+|---|---|---|
+| ds | DeepSeek V4 Flash | 6 of 10 |
+| ds2 | DeepSeek V4 Flash, rerunning ds's 4 failures and inv-0714 | 5 of 5 |
+| ds-lean | DeepSeek V4 Flash, trimmed prompt | 9 of 10 |
+| oss-low | gpt-oss-120b, low reasoning effort | 7 of 10 |
+| k3, k3b | Kimi K3 | 3 of 3 |
+
+Costs come from token counts at prices set in each run's config, not from
+bills. The runs' traces and summaries are on the test server, not in this
+repository.
+
 ## Rerunning
 
-The scripts are in this session's scratch area and on the server under
-`/var/tmp/glarb-bench/scripts`; they are not in the repository.
-SPONGE: decide whether the bench scripts belong in this repo.
+The scripts are in [`bench/`](../../bench), with raw results in
+`bench/results/` for E4, E7, E10, E10b, E11, E12, E13 and E14. Most
+scripts still assume the test server's paths.

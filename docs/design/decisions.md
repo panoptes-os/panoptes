@@ -34,7 +34,7 @@ Status: accepted, 2026-10-27. The Observation row is superseded by
 
 ### What the kernel features need from the host
 
-The image checks these at start and refuses to park without them:
+The image checks these at start and warns when one is missing:
 
 | Need | Why |
 |---|---|

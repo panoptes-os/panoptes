@@ -1,5 +1,10 @@
 # Desktop: one Cage per agent, a trimmed Chromium, 1280x720
 
+Status: historical. This describes the earlier desk, which drove one
+Chromium per agent over CDP at 1280x720. Since 2026-10-30 the desk drives
+any program over Wayland at 1024x768 ([decisions.md](decisions.md)).
+Statements below about panoptes-desk describe the earlier desk.
+
 Research notes, 2026-10-26. This doc covers the userspace each agent
 sees: the compositor, the browser, the screen size, and how agents drive
 them. Numbers come from the test server and its methods in

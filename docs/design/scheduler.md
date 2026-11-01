@@ -1,5 +1,9 @@
 # Scheduler: each host decides which agents stay resident
 
+Status: historical. The residency ideas stand, but the unit layout below is
+not what Panoptes builds, and panoptes-resd neither evicts nor relaunches
+agents. The [one-pager](../one-pager.md) shows what runs today.
+
 Research notes, 2026-10-26: what an agent container is, and what
 schedules it. A kiosk is one Cage and the app it runs, an agent is the
 loop that drives kiosks, and a unit is the trust boundary around both.
