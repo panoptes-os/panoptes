@@ -4,7 +4,7 @@
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   # Cage 0.3.1 with -r and panoptes_window.
   inputs.cage-src = {
-    url = "github:panoptes-os/cage/panoptes";
+    url = "github:panoptes-os/cage/base/v0.3.1";
     flake = false;
   };
 

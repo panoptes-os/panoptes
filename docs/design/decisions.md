@@ -19,7 +19,7 @@ and the screen size and CDP driving in [desktop.md](desktop.md).
 | Decision | Choice | Why |
 |---|---|---|
 | Scope | Any Linux GUI program, Wayland or X11; not a browser harness | The earlier desk drove one Chromium over CDP, so an agent could use only web pages |
-| Compositor | Our fork of Cage: [panoptes-os/cage](https://github.com/panoptes-os/cage), branch `panoptes` | Upstream Cage cannot set its output size or list windows with their pid and box, and it mishandled X11 dialogs: they lost focus to clicks on their main window and could not resize |
+| Compositor | Our fork of Cage: [panoptes-os/cage](https://github.com/panoptes-os/cage), branch `base/v0.3.1` | Upstream Cage cannot set its output size or list windows with their pid and box, and it mishandled X11 dialogs: they lost focus to clicks on their main window and could not resize |
 | Screen | 1024x768 at scale 1 | Anthropic's computer-use guide recommends it for desktops, and it is the cheapest size in desktop.md's token table for every model family there |
 | Driving | panoptes-desk as a Wayland client: screencopy for pixels, a virtual pointer and keyboard for input, the fork's `panoptes_window` for windows | It works the same for every program; CDP reaches only Chromium |
 | Programs | `launch` runs any argv in the agent's kiosk cgroup | Tasks need programs Panoptes does not know in advance |

@@ -1,4 +1,4 @@
-# Our fork of Cage, panoptes-os/cage's panoptes branch, built with nixpkgs'
+# Our fork of Cage, panoptes-os/cage's base/v0.3.1 branch, built with nixpkgs'
 # own recipe for the release it forked from.
 { cage, src }:
 

@@ -116,7 +116,7 @@ In a git checkout, flakes see only tracked files: add new files, or build
 `path:.#checks...`.
 
 Cage is [panoptes-os/cage](https://github.com/panoptes-os/cage), branch
-`panoptes`, pinned as the flake input `cage-src`. To check a local Cage
+`base/v0.3.1`, pinned as the flake input `cage-src`. To check a local Cage
 tree before pushing it:
 
 ```sh
