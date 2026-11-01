@@ -1,251 +1,220 @@
-//! The desk's side of residency: acquire the kiosk from panoptes-resd
-//! before each tool call, and release it once no call is in flight and
-//! none has started for a grace period. Every front end goes through
-//! `Desk::call`, so freezing works the same for panoptes-loop and for any
-//! MCP harness, including ones that send calls in parallel.
+//! The desk's client of panoptes-resd: the I/O layer of the lease. The desk
+//! thread calls it when [`crate::lease::Lease`] says to acquire or release.
+//!
+//! One JSON line each way per request, on a connection kept between calls:
 //!
 //! ```text
-//! call ─> acquire (thaw if frozen) ─> tool ─> reply ─> no call for GRACE ms ─> release (freeze)
+//! > {"op":"acquire"}      < {"ok":true,"from":"parked",...}
+//! > {"op":"release"}      < {"ok":true,...}
 //! ```
 //!
-//! If panoptes-resd cannot be reached, the desk thaws its own kiosk (the
-//! unit delegates the agent's cgroup to the desk's user) and acts anyway, so
-//! a dead residency manager never wedges an agent.
+//! A refusal fails the call that asked. When resd cannot be reached or
+//! does not answer in time, the desk thaws the kiosk itself, so the agent
+//! keeps working without residency.
 
+use crate::owner::{Acquired, Residency};
 use panoptes_cgroup::Cgroup;
 use serde_json::Value;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+use std::time::{Duration, Instant};
+
+/// How long one request may take, thawing a parked kiosk included.
+const IO_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long the desk's own thaw may take when resd is out of reach.
+const THAW_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug)]
-struct Conn {
-    read: BufReader<OwnedReadHalf>,
-    write: OwnedWriteHalf,
-}
-
-#[derive(Debug, Default)]
-struct Inner {
-    conn: Option<Conn>,
-    /// True between an acquire and the release after it.
-    held: bool,
-}
-
-#[derive(Debug)]
-pub struct Residency {
+pub struct Resd {
     socket: PathBuf,
-    grace: Duration,
     kiosk: Cgroup,
-    /// Calls between their acquire and their `release_later`. A release
-    /// never fires while one is in flight.
-    active: AtomicU64,
-    /// Bumped by every acquire; a pending release fires only if it is
-    /// unchanged, so a call that starts during the grace period restarts
-    /// it.
-    generation: AtomicU64,
-    inner: tokio::sync::Mutex<Inner>,
+    conn: Option<BufReader<UnixStream>>,
+    io_timeout: Duration,
 }
 
-/// What an acquire did, for the tool reply's timing.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Acquired {
-    /// Round trip to panoptes-resd, including its cgroup writes.
-    pub ms: f64,
-    /// The kiosk was frozen or parked before this call.
-    pub woke: bool,
+/// Why a request got no `ok`.
+#[derive(Debug)]
+enum Failed {
+    /// resd answered no; the reason is its own.
+    Refused(String),
+    /// No answer: resd is down, hung, or closed the connection.
+    Unreachable(String),
 }
 
-impl Residency {
-    pub fn new(socket: PathBuf, grace: Duration, kiosk: Cgroup) -> Arc<Residency> {
-        Arc::new(Residency {
+impl Resd {
+    pub fn new(socket: PathBuf, kiosk: Cgroup) -> Resd {
+        Resd {
             socket,
-            grace,
             kiosk,
-            active: AtomicU64::new(0),
-            generation: AtomicU64::new(0),
-            inner: tokio::sync::Mutex::default(),
-        })
+            conn: None,
+            io_timeout: IO_TIMEOUT,
+        }
     }
 
-    async fn send(&self, inner: &mut Inner, op: &str) -> Result<Value, String> {
-        if inner.conn.is_none() {
+    fn send(&mut self, op: &str) -> Result<Value, Failed> {
+        let r = self.round_trip(op);
+        if matches!(r, Err(Failed::Unreachable(_))) {
+            // The stream may hold half a reply; start over next time.
+            self.conn = None;
+        }
+        r
+    }
+
+    fn round_trip(&mut self, op: &str) -> Result<Value, Failed> {
+        let unreachable = |e: std::io::Error| Failed::Unreachable(e.to_string());
+        if self.conn.is_none() {
             let s = UnixStream::connect(&self.socket)
-                .await
-                .map_err(|e| format!("{}: {e}", self.socket.display()))?;
-            let (r, w) = s.into_split();
-            inner.conn = Some(Conn {
-                read: BufReader::new(r),
-                write: w,
-            });
+                .map_err(|e| Failed::Unreachable(format!("{}: {e}", self.socket.display())))?;
+            s.set_read_timeout(Some(self.io_timeout))
+                .map_err(unreachable)?;
+            s.set_write_timeout(Some(self.io_timeout))
+                .map_err(unreachable)?;
+            self.conn = Some(BufReader::new(s));
         }
-        let conn = inner.conn.as_mut().expect("connected");
-        let line = format!("{{\"op\":\"{op}\"}}\n");
-        let mut buf = String::new();
-        let io = async {
-            conn.write.write_all(line.as_bytes()).await?;
-            conn.read.read_line(&mut buf).await
-        };
-        match io.await {
-            Ok(n) if n > 0 => {}
-            Ok(_) | Err(_) => {
-                inner.conn = None;
-                return Err("panoptes-resd closed the connection".into());
-            }
+        let conn = self.conn.as_mut().expect("connected above");
+        conn.get_mut()
+            .write_all(format!("{{\"op\":\"{op}\"}}\n").as_bytes())
+            .map_err(unreachable)?;
+        let mut line = String::new();
+        match conn.read_line(&mut line) {
+            Ok(0) => return Err(Failed::Unreachable("resd closed the connection".into())),
+            Ok(_) => {}
+            Err(e) => return Err(unreachable(e)),
         }
-        let v: Value = serde_json::from_str(&buf).map_err(|e| e.to_string())?;
+        let v: Value = serde_json::from_str(&line)
+            .map_err(|e| Failed::Unreachable(format!("bad reply: {e}")))?;
         if v["ok"].as_bool() == Some(true) {
             Ok(v)
         } else {
-            Err(v["error"].as_str().unwrap_or("refused").to_owned())
+            let why = v["error"].as_str().unwrap_or("refused");
+            Err(Failed::Refused(why.to_owned()))
         }
     }
+}
 
-    /// Make the kiosk runnable before a tool call.
-    pub async fn acquire(&self) -> Acquired {
-        self.active.fetch_add(1, Ordering::SeqCst);
-        self.generation.fetch_add(1, Ordering::SeqCst);
-        let mut inner = self.inner.lock().await;
-        if inner.held {
-            return Acquired::default();
-        }
-        let start = std::time::Instant::now();
-        let woke = match self.send(&mut inner, "acquire").await {
+impl Residency for Resd {
+    fn acquire(&mut self) -> Result<Acquired, String> {
+        let start = Instant::now();
+        let woke = match self.send("acquire") {
             Ok(v) => matches!(v["from"].as_str(), Some("waiting" | "parked")),
-            Err(e) => {
+            Err(Failed::Refused(why)) => {
+                return Err(format!("panoptes-resd refused the kiosk: {why}"));
+            }
+            Err(Failed::Unreachable(e)) => {
                 eprintln!("panoptes-desk: resd acquire: {e}; thawing the kiosk itself");
                 let frozen = self.kiosk.events().map(|ev| ev.frozen).unwrap_or(false);
                 if frozen {
-                    let _ = self.kiosk.thaw(Duration::from_secs(5));
+                    let _ = self.kiosk.thaw(THAW_TIMEOUT);
                 }
                 frozen
             }
         };
-        inner.held = true;
         let ms = (start.elapsed().as_secs_f64() * 100_000.0).round() / 100.0;
         if woke {
             eprintln!("panoptes-desk: woke kiosk in {ms} ms");
         }
-        Acquired { ms, woke }
+        Ok(Acquired { ms, woke })
     }
 
-    /// End a call that `acquire` started. Once no call is in flight and
-    /// none has started for the grace period, release the kiosk.
-    pub fn release_later(self: &Arc<Self>) {
-        let before = self.active.fetch_sub(1, Ordering::SeqCst);
-        debug_assert!(before > 0, "release_later without an acquire");
-        let generation = self.generation.load(Ordering::SeqCst);
-        let me = self.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(me.grace).await;
-            if !me.idle_since(generation) {
-                return;
-            }
-            let mut inner = me.inner.lock().await;
-            // A call may have started while this task waited for the lock.
-            if !me.idle_since(generation) || !inner.held {
-                return;
-            }
-            if let Err(e) = me.send(&mut inner, "release").await {
-                eprintln!("panoptes-desk: resd release: {e}");
-            }
-            inner.held = false;
-        });
-    }
-
-    /// No call is in flight, and none has started since `generation`.
-    fn idle_since(&self, generation: u64) -> bool {
-        self.active.load(Ordering::SeqCst) == 0
-            && self.generation.load(Ordering::SeqCst) == generation
+    fn release(&mut self) {
+        match self.send("release") {
+            Ok(_) => {}
+            Err(Failed::Refused(why)) => eprintln!("panoptes-desk: resd refused release: {why}"),
+            Err(Failed::Unreachable(e)) => eprintln!("panoptes-desk: resd release: {e}"),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-    use tokio::net::UnixListener;
+    use std::os::unix::net::UnixListener;
+    use std::path::Path;
+    use std::sync::mpsc;
 
-    const GRACE: Duration = Duration::from_millis(200);
-    /// Long enough for any pending release to have fired.
-    const SETTLE: Duration = Duration::from_millis(600);
-
-    /// A stand-in panoptes-resd that records each op and agrees to it, and a
-    /// kiosk directory that `Cgroup::open` accepts.
-    async fn fake_resd(name: &str) -> (Arc<Residency>, Arc<Mutex<Vec<String>>>, PathBuf) {
+    /// A kiosk directory that `Cgroup::open` accepts, and a socket path
+    /// beside it.
+    fn dir(name: &str) -> (PathBuf, Cgroup) {
         let dir = std::env::temp_dir().join(format!("panoptes-desk-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("cgroup.procs"), "").unwrap();
-        let socket = dir.join("resd.sock");
-        let listener = UnixListener::bind(&socket).unwrap();
-        let ops = Arc::new(Mutex::new(Vec::new()));
-        let seen = ops.clone();
-        tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let (r, mut w) = stream.into_split();
-            let mut lines = BufReader::new(r).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
+        let kiosk = Cgroup::open(&dir).unwrap();
+        (dir, kiosk)
+    }
+
+    /// A stand-in panoptes-resd on `socket` that answers each op with
+    /// `answer(op)`, or not at all for `None`, and reports the ops it saw.
+    fn fake(socket: &Path, answer: fn(&str) -> Option<&'static str>) -> mpsc::Receiver<String> {
+        let listener = UnixListener::bind(socket).unwrap();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut w = stream.try_clone().unwrap();
+            for line in BufReader::new(stream).lines() {
+                let Ok(line) = line else { return };
                 let v: Value = serde_json::from_str(&line).unwrap();
-                seen.lock()
-                    .unwrap()
-                    .push(v["op"].as_str().unwrap().to_owned());
-                w.write_all(b"{\"ok\":true,\"from\":\"acting\"}\n")
-                    .await
-                    .unwrap();
+                let op = v["op"].as_str().unwrap().to_owned();
+                let reply = answer(&op);
+                tx.send(op).unwrap();
+                match reply {
+                    Some(r) => w.write_all(format!("{r}\n").as_bytes()).unwrap(),
+                    None => std::thread::sleep(Duration::from_secs(60)),
+                }
             }
         });
-        let kiosk = Cgroup::open(&dir).unwrap();
-        (Residency::new(socket, GRACE, kiosk), ops, dir)
+        rx
     }
 
-    fn ops_now(ops: &Mutex<Vec<String>>) -> Vec<String> {
-        ops.lock().unwrap().clone()
-    }
-
-    #[tokio::test]
-    async fn a_release_waits_for_the_grace_period() {
-        let (res, ops, dir) = fake_resd("grace").await;
-        res.acquire().await;
-        res.release_later();
-        tokio::time::sleep(GRACE / 5).await;
-        assert_eq!(ops_now(&ops), ["acquire"]);
-        tokio::time::sleep(SETTLE).await;
-        assert_eq!(ops_now(&ops), ["acquire", "release"]);
+    #[test]
+    fn acquire_reports_a_wake_and_release_follows_on_one_connection() {
+        let (dir, kiosk) = dir("ops");
+        let socket = dir.join("resd.sock");
+        let ops = fake(&socket, |op| {
+            Some(match op {
+                "acquire" => r#"{"ok":true,"from":"parked"}"#,
+                _ => r#"{"ok":true}"#,
+            })
+        });
+        let mut resd = Resd::new(socket, kiosk);
+        assert!(resd.acquire().unwrap().woke);
+        resd.release();
+        assert_eq!(ops.recv().unwrap(), "acquire");
+        assert_eq!(ops.recv().unwrap(), "release");
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    #[tokio::test]
-    async fn overlapping_calls_keep_the_kiosk_until_the_last_ends() {
-        let (res, ops, dir) = fake_resd("overlap").await;
-        // A and B are both in flight; A ends first.
-        res.acquire().await;
-        res.acquire().await;
-        res.release_later();
-        tokio::time::sleep(SETTLE).await;
-        assert_eq!(ops_now(&ops), ["acquire"], "released while B was in flight");
-        res.release_later();
-        tokio::time::sleep(SETTLE).await;
-        assert_eq!(ops_now(&ops), ["acquire", "release"]);
+    #[test]
+    fn a_refusal_fails_the_call() {
+        let (dir, kiosk) = dir("refuse");
+        let socket = dir.join("resd.sock");
+        let _ops = fake(&socket, |_| Some(r#"{"ok":false,"error":"unknown agent"}"#));
+        let e = Resd::new(socket, kiosk).acquire().unwrap_err();
+        assert!(e.contains("refused") && e.contains("unknown agent"), "{e}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    #[tokio::test]
-    async fn a_call_during_the_grace_period_restarts_it() {
-        let (res, ops, dir) = fake_resd("restart").await;
-        res.acquire().await;
-        res.release_later();
-        tokio::time::sleep(GRACE / 2).await;
-        res.acquire().await;
-        res.release_later();
-        // The first release's timer has passed, but B started after it.
-        tokio::time::sleep(GRACE * 3 / 4).await;
-        assert_eq!(ops_now(&ops), ["acquire"]);
-        tokio::time::sleep(SETTLE).await;
-        assert_eq!(ops_now(&ops), ["acquire", "release"]);
+    #[test]
+    fn without_resd_the_desk_carries_on() {
+        let (dir, kiosk) = dir("absent");
+        let got = Resd::new(dir.join("no.sock"), kiosk).acquire().unwrap();
+        // The fake kiosk reports no freeze, so there was nothing to thaw.
+        assert!(!got.woke);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_silent_resd_times_out_and_the_next_call_reconnects() {
+        let (dir, kiosk) = dir("silent");
+        let socket = dir.join("resd.sock");
+        let _ops = fake(&socket, |_| None);
+        let mut resd = Resd::new(socket, kiosk);
+        resd.io_timeout = Duration::from_millis(100);
+        let start = Instant::now();
+        assert!(!resd.acquire().unwrap().woke);
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert!(resd.conn.is_none(), "kept a connection with half a reply");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

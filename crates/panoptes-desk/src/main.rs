@@ -4,19 +4,43 @@
 //! in `<agent>/kiosk`, drives it as a Wayland client, and serves the
 //! agent's tools on a unix socket (the internal protocol and MCP) and, with
 //! `--mcp-stdio`, MCP on stdin and stdout.
+//!
+//! It is split as docs/design/verification.md says:
+//!
+//! ```text
+//! policy    lease, settle, windows, keymap     no I/O, clock or threads
+//! threads   owner (the desk thread), handoff   checked with loom
+//! I/O       wl, kiosk, resd, desk's tools      checked by the desk VM test
+//! edge      server: tokio, rmcp, the socket
+//! ```
+//!
+//! Threads, each named:
+//!
+//! ```text
+//! main      supervisor: waits for the edge to end or the compositor to go
+//! edge      tokio current-thread: socket, stdio, signals
+//! desk      owner of the desktop; runs calls in order
+//! wayland   reads and dispatches the compositor's events
+//! reap-PID  waits for one launched program
+//! ```
 
 mod desk;
+mod handoff;
 mod keymap;
 mod kiosk;
+mod lease;
+mod owner;
 mod protocol;
 mod resd;
 mod server;
+mod settle;
+mod windows;
 mod wl;
 
-use kiosk::{Config, Kiosk};
+use kiosk::Config;
 use panoptes_cgroup::Cgroup;
+use panoptes_sync::{self as sync, mpsc};
 use std::path::PathBuf;
-use std::sync::Arc;
 
 const USAGE: &str = "usage: panoptes-desk --run-dir DIR [--cgroup DIR] [--socket PATH] \
 [--size WxH] [--mcp-stdio] [--resd SOCK] [--grace-ms N] [--thumb-ms N]
@@ -115,39 +139,48 @@ fn main() {
         eprintln!("panoptes-desk: {}: {e}", args.config.run_dir.display());
         std::process::exit(1);
     }
-    let kiosk = match kiosk::start(kiosk_cg, &args.config) {
-        Ok(k) => Arc::new(k),
+    let (kiosk, cage) = match kiosk::start(kiosk_cg, &args.config) {
+        Ok(k) => k,
         Err(e) => {
             eprintln!("panoptes-desk: {e}");
             std::process::exit(1);
         }
     };
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .expect("tokio runtime");
-    let code = rt.block_on(run(args, kiosk.clone()));
-    kiosk.shutdown();
+    let code = run(args, kiosk);
+    cage.shutdown();
     std::process::exit(code);
 }
 
-async fn run(args: Args, kiosk: Arc<Kiosk>) -> i32 {
-    let wl = match wl::Wl::connect(&kiosk.socket) {
+/// Why the desk stops.
+#[derive(Debug)]
+enum Exit {
+    /// The edge ended with this exit code.
+    Edge(i32),
+    /// The connection to the compositor broke.
+    Lost(String),
+}
+
+/// Start the threads, then wait for a reason to stop. Returns the exit
+/// code.
+fn run(args: Args, kiosk: kiosk::Kiosk) -> i32 {
+    let (exit_tx, exit_rx) = mpsc::channel();
+    let (shared, changes) = handoff::Shared::new();
+    let exits = shared.notifier();
+    let lost = {
+        let exit_tx = exit_tx.clone();
+        move |why| {
+            let _ = exit_tx.send(Exit::Lost(why));
+        }
+    };
+    let wl = match wl::Wl::connect(&kiosk.socket, shared, lost) {
         Ok(w) => w,
         Err(e) => {
             eprintln!("panoptes-desk: {e}");
             return 1;
         }
     };
-    let residency = args.resd.clone().map(|sock| {
-        resd::Residency::new(
-            sock,
-            std::time::Duration::from_millis(args.grace_ms),
-            kiosk.cgroup.clone(),
-        )
-    });
-    let desk = match desk::Desk::new(wl, kiosk, residency).await {
+    let kiosk_cg = kiosk.cgroup.clone();
+    let mut desk = match desk::Desk::new(wl, kiosk, changes, exits) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("panoptes-desk: {e}");
@@ -160,30 +193,31 @@ async fn run(args: Args, kiosk: Arc<Kiosk>) -> i32 {
             std::time::Duration::from_millis(n),
         );
     }
+    let residency = args.resd.clone().map(|sock| {
+        (
+            resd::Resd::new(sock, kiosk_cg),
+            lease::Lease::new(args.grace_ms),
+        )
+    });
+
+    let (calls_tx, calls_rx) = mpsc::channel();
+    sync::spawn("desk", move || owner::run(calls_rx, &mut desk, residency));
     let socket = args
         .socket
         .unwrap_or_else(|| args.config.run_dir.join("desk.sock"));
-    let listen = server::listen(desk.clone(), &socket);
-    eprintln!("panoptes-desk: tools on {}", socket.display());
+    let handle = server::Handle::new(calls_tx);
+    let mcp_stdio = args.mcp_stdio;
+    sync::spawn("edge", move || {
+        let code = server::run(handle, socket, mcp_stdio);
+        let _ = exit_tx.send(Exit::Edge(code));
+    });
 
-    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .expect("SIGTERM handler");
-    let stdio = async {
-        if args.mcp_stdio {
-            server::serve_mcp(desk.clone(), tokio::io::stdin(), tokio::io::stdout()).await;
-        } else {
-            std::future::pending::<()>().await;
-        }
-    };
-    let code = tokio::select! {
-        r = listen => {
-            eprintln!("panoptes-desk: socket: {r:?}");
+    match sync::recv(&exit_rx) {
+        Ok(Exit::Edge(code)) => code,
+        Ok(Exit::Lost(why)) => {
+            eprintln!("panoptes-desk: lost the compositor: {why}");
             1
         }
-        _ = stdio => 0,
-        _ = tokio::signal::ctrl_c() => 0,
-        _ = term.recv() => 0,
-    };
-    let _ = std::fs::remove_file(&socket);
-    code
+        Err(_) => 1,
+    }
 }
