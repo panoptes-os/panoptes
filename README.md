@@ -78,6 +78,12 @@ cargo build --release --workspace
 cargo test --workspace
 ```
 
+Before writing or reshaping a subsystem, read
+[docs/design/verification.md](docs/design/verification.md). It says how to
+split the subsystem so that its checks can prove it. Agents read
+[docs/agents/verification.md](docs/agents/verification.md), which has the
+same rules.
+
 Parking needs zswap (zsmalloc and zstd) and swap large enough for the
 parked desktops. [docs/design/decisions.md](docs/design/decisions.md)
 lists the host settings.

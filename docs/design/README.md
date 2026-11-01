@@ -12,7 +12,9 @@ Wayland ([decisions.md](decisions.md)).
 | [desktop.md](desktop.md) | Which compositor, browser, and screen size, and how agents drive them | One Cage per agent, a trimmed Chromium frozen between steps, 1280x720 at scale 1, and panoptes-desk serving its tools over MCP. Superseded in part on 2026-10-30: any program, 1024x768, driven over Wayland |
 | [scheduler.md](scheduler.md) | What an agent container is, and what schedules it | A cgroup tree. A residency manager on each host parks idle kiosks; Kubernetes cannot. Historical: the unit layout is not what Panoptes builds |
 | [kernel-and-inference.md](kernel-and-inference.md) | Where kernel and inference work pays | Memory parking pays, network work does not, and the GPU sets local density. Historical: written while a model step took seconds; see the section below |
-| [decisions.md](decisions.md) | What was decided on 2026-10-27 and 2026-10-30 | Panoptes: an AGPL engine in a Docker image built with Nix, its own agent loop, and MCP for other harnesses. Since 2026-10-30, a harness for any Linux GUI program on a Cage fork at 1024x768 |
+| [decisions.md](decisions.md) | What was decided on 2026-10-27, 2026-10-30 and 2026-10-31 | Panoptes: an AGPL engine in a Docker image built with Nix, its own agent loop, and MCP for other harnesses. Since 2026-10-30, a harness for any Linux GUI program on a Cage fork at 1024x768. Since 2026-10-31, std threads, with tokio only for network libraries |
+| [verification.md](verification.md) | How to write a subsystem so that its checks can prove it | Split it into a pure policy, threads, and I/O. Check the policy exhaustively, the threads with loom, and the I/O in NixOS VMs |
+| [verification-rationale.md](verification-rationale.md) | Why each verification rule exists | The fact each rule rests on, with its date; the tools left out; what would change the rules |
 | [measurements.md](measurements.md) | How each number was taken | Machine, versions, methods, caveats |
 
 ## Since 2026-10-31, the harness is the cost

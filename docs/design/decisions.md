@@ -1,5 +1,16 @@
 # Decisions
 
+## 2026-10-31
+
+Status: accepted, 2026-10-31.
+
+| Decision | Choice | Why |
+|---|---|---|
+| Design for fast models | Treat a model call as free and instant; optimize the harness's wall and CPU ms per step | See [vision.md](../vision.md) |
+| Concurrency | std threads, `thread::scope` and channels, with one owner thread for each piece of mutable state; tokio only for network libraries | A thread's stack shows in gdb and in a panic; loom can check std threads but not tokio. The speed gain is not measured |
+| Verification | Split each subsystem into policy, threads and I/O, each with its own check; see [verification.md](verification.md) | Panoptes is hard where threads meet and where it drives the kernel and the compositor, not in its arithmetic |
+| Proof tools | Exhaustive tests for policies, and rarely Aeneas; loom for threads; NixOS VM checks for I/O, and ASan and UBSan for the C code Panoptes ships | Each tool checks the code itself, not a second model of it. [verification-rationale.md](verification-rationale.md) lists the tools left out |
+
 ## 2026-10-30: a harness for any Linux GUI app
 
 Status: accepted, 2026-10-30. Supersedes the 2026-10-27 Observation row,
