@@ -15,8 +15,8 @@ rustPlatform.buildRustPackage {
   cargoLock.lockFile = ../Cargo.lock;
 
   # CI runs `cargo test` (.github/workflows/checks.yml). The cgroup tests
-  # that need root are #[ignore]d; crates/panoptes-cgroup/tests/run-root.sh
-  # runs them.
+  # that need root are #[ignore]d; the `cgroup` check runs them in a VM, and
+  # crates/panoptes-cgroup/tests/run-root.sh on a host.
   doCheck = false;
 
   meta = {

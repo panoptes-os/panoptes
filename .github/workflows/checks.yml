@@ -38,8 +38,8 @@ jobs:
         run: nix develop --command cargo fmt --all --check
       - name: cargo clippy
         run: nix develop --command cargo clippy --workspace --all-targets --locked -- -D warnings
-      # tests that need root and a cgroup v2 mount are #[ignore]d; the bench
-      # reruns on a real host cover them
+      # tests that need root and a cgroup v2 mount are #[ignore]d; the
+      # cgroup check in nix flake check runs them in a VM
       - name: cargo test
         run: nix develop --command cargo test --workspace --locked
       - name: demo portals

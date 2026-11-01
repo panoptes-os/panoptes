@@ -109,6 +109,9 @@
         resd = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/resd.nix {
           inherit (self.packages.${system}) panoptes;
         };
+        cgroup = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/cgroup.nix {
+          inherit (self.packages.${system}) panoptes;
+        };
       });
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt);
