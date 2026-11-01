@@ -124,7 +124,7 @@ nix build -L .#checks.x86_64-linux.desk --override-input cage-src "path:$HOME/ca
 ```
 
 After pushing the branch, `nix flake update cage-src` moves the pin. If
-the change touches `protocols/panoptes-window-v1.xml`, copy it to
+the change touches `protocols/panoptes-window.xml`, copy it to
 `crates/panoptes-desk/protocols/`; `window-protocol` fails until the two
 match.
 

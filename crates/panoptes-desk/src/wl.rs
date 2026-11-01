@@ -1,5 +1,5 @@
 //! The desk's Wayland client of the Cage fork. Screencopy gives pixels, a
-//! virtual pointer and keyboard give input, and panoptes_window_v1 gives
+//! virtual pointer and keyboard give input, and panoptes_window gives
 //! the window list.
 //!
 //! The I/O layer. One thread reads and dispatches events for the life of
@@ -16,7 +16,7 @@
 
 use crate::handoff::{Release, Request, Shared};
 use crate::keymap::KeyEvent;
-use crate::protocol::{panoptes_window_manager_v1 as manager, panoptes_window_v1 as window};
+use crate::protocol::{panoptes_window_manager as manager, panoptes_window as window};
 use crate::windows::{self, Windows};
 use panoptes_sync::{self as sync, Arc, mpsc};
 use std::fs::File;
@@ -63,7 +63,7 @@ pub struct Wl {
     screencopy: screencopy::ZwlrScreencopyManagerV1,
     pointer: pointer::ZwlrVirtualPointerV1,
     keyboard: keyboard::ZwpVirtualKeyboardV1,
-    shared: Arc<Shared<window::PanoptesWindowV1>>,
+    shared: Arc<Shared<window::PanoptesWindow>>,
 }
 
 /// A window proxy's desk number, set when the manager announces it. The
@@ -71,14 +71,14 @@ pub struct Wl {
 #[derive(Debug, Default)]
 struct WindowId(OnceLock<u32>);
 
-fn window_id(w: &window::PanoptesWindowV1) -> Option<u32> {
+fn window_id(w: &window::PanoptesWindow) -> Option<u32> {
     w.data::<WindowId>()?.0.get().copied()
 }
 
 /// The event thread's dispatch state.
 #[derive(Debug)]
 struct Handler {
-    shared: Arc<Shared<window::PanoptesWindowV1>>,
+    shared: Arc<Shared<window::PanoptesWindow>>,
     shm: wl_shm::WlShm,
 }
 
@@ -94,7 +94,7 @@ impl Wl {
     /// `lost` with it.
     pub fn connect(
         socket: &Path,
-        shared: Arc<Shared<window::PanoptesWindowV1>>,
+        shared: Arc<Shared<window::PanoptesWindow>>,
         lost: impl FnOnce(String) + Send + 'static,
     ) -> Result<Wl, String> {
         let stream =
@@ -117,9 +117,9 @@ impl Wl {
         let keyboards: keyboard_manager::ZwpVirtualKeyboardManagerV1 = globals
             .bind(&qh, 1..=1, ())
             .map_err(lacks("zwp_virtual_keyboard_manager_v1"))?;
-        let _windows: manager::PanoptesWindowManagerV1 =
+        let _windows: manager::PanoptesWindowManager =
             globals.bind(&qh, 1..=1, ()).map_err(|_| {
-                "the compositor has no panoptes_window_manager_v1; is cage the Panoptes fork?"
+                "the compositor has no panoptes_window_manager; is cage the Panoptes fork?"
                     .to_owned()
             })?;
         // The pointer moves over this output only, so absolute motion is in
@@ -185,7 +185,7 @@ impl Wl {
         self.flush()
     }
 
-    fn handle(&self, id: u32) -> Result<window::PanoptesWindowV1, String> {
+    fn handle(&self, id: u32) -> Result<window::PanoptesWindow, String> {
         self.shared
             .handle(id)
             .ok_or_else(|| format!("no window {id}"))
@@ -490,10 +490,10 @@ impl Dispatch<frame::ZwlrScreencopyFrameV1, Arc<Request<Capture, Captured>>> for
     }
 }
 
-impl Dispatch<manager::PanoptesWindowManagerV1, ()> for Handler {
+impl Dispatch<manager::PanoptesWindowManager, ()> for Handler {
     fn event(
         state: &mut Self,
-        _: &manager::PanoptesWindowManagerV1,
+        _: &manager::PanoptesWindowManager,
         event: manager::Event,
         _: &(),
         _: &Connection,
@@ -510,15 +510,15 @@ impl Dispatch<manager::PanoptesWindowManagerV1, ()> for Handler {
         }
     }
 
-    event_created_child!(Handler, manager::PanoptesWindowManagerV1, [
-        manager::EVT_WINDOW_OPCODE => (window::PanoptesWindowV1, WindowId::default()),
+    event_created_child!(Handler, manager::PanoptesWindowManager, [
+        manager::EVT_WINDOW_OPCODE => (window::PanoptesWindow, WindowId::default()),
     ]);
 }
 
-impl Dispatch<window::PanoptesWindowV1, WindowId> for Handler {
+impl Dispatch<window::PanoptesWindow, WindowId> for Handler {
     fn event(
         state: &mut Self,
-        proxy: &window::PanoptesWindowV1,
+        proxy: &window::PanoptesWindow,
         event: window::Event,
         id: &WindowId,
         _: &Connection,

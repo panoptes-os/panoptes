@@ -1,6 +1,7 @@
 # The forked Cage runs with no client, its headless output at the size -r
 # asks for, and a screenshot comes back at that size. A malformed size is
-# refused before anything starts.
+# refused before anything starts, and Cage exits with status 1 when an output
+# can't take a size.
 {
   runCommand,
   cage,
@@ -37,6 +38,12 @@ runCommand "cage-size"
       exit 1
     fi
     grep -q 'expected WxH' bad.log || { cat bad.log; exit 1; }
+
+    # Too big for any buffer: the output's commit fails.
+    status=0
+    cage -r 2000000000x2000000000 2> huge.log || status=$?
+    [ "$status" = 1 ] || { echo "cage exited $status" >&2; cat huge.log; exit 1; }
+    grep -q 'did not take' huge.log || { cat huge.log; exit 1; }
 
     touch "$out"
   ''

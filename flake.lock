@@ -3,11 +3,11 @@
     "cage-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1793547109,
-        "narHash": "sha256-C3jGwHaP1Eb36rLYz/mvS0xObiPNnVkN+MkrPwxr4Tc=",
+        "lastModified": 1793569067,
+        "narHash": "sha256-dtJH7Sq60ZO2dLYoY9VEKo9CGOVZ1xoNEIkMnO72rd8=",
         "owner": "panoptes-os",
         "repo": "cage",
-        "rev": "782c01f8ee75d43eda3ccf3fd5d9bfee2c03e8d5",
+        "rev": "0ae20d7010ad72733e5ed27484f7fb638bca2b25",
         "type": "github"
       },
       "original": {
