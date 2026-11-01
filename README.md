@@ -101,12 +101,13 @@ to end. Run one with `nix build -L .#checks.x86_64-linux.NAME`:
 | `cage-windows-asan` | The same, with the fork built under ASan and UBSan: no memory error, leak or undefined behavior |
 | `window-protocol` | The desk's copy of the window protocol matches the fork's |
 | `desk` | panoptes-desk under systemd in a NixOS VM, driving wev, xev and Tk over MCP |
+| `resd` | panoptes-resd in a NixOS VM with zswap on: a kiosk cgroup frozen, parked, woken, kept frozen across a restart, evicted and forgotten |
 
-All but `desk` run in the build sandbox. `desk` needs a VM, because the
-sandbox has no cgroupfs; it takes about 30 s on a host with KVM. Without
-KVM the VM is emulated, and the check's timeouts allow for that. In a git
-checkout, flakes see only tracked files: add new files, or build
-`path:.#checks...`.
+All but `desk` and `resd` run in the build sandbox. Those two need a VM,
+because the sandbox has no cgroupfs; each takes under 30 s on a host with
+KVM. Without KVM the VM is emulated, and the checks' timeouts allow for
+that. In a git checkout, flakes see only tracked files: add new files, or
+build `path:.#checks...`.
 
 Cage is [panoptes-os/cage](https://github.com/panoptes-os/cage), branch
 `panoptes`, pinned as the flake input `cage-src`. To check a local Cage

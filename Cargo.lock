@@ -1240,9 +1240,12 @@ dependencies = [
 name = "panoptes-resd"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "panoptes-cgroup",
+ "panoptes-sync",
+ "rustix 1.1.6",
  "serde_json",
- "tokio",
+ "signal-hook",
 ]
 
 [[package]]
