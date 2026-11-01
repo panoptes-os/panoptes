@@ -4,8 +4,10 @@
 # client that was watching before the windows mapped, and a client that
 # binds afterwards sees the same state. A Tk dialog gets the size it asks
 # for, centered, before and after it maps; its main window keeps the
-# screen.
+# screen. Cage then exits cleanly on SIGTERM; built with sanitizers, neither
+# it nor panoptes-windows reports a memory error, leak or undefined behavior.
 {
+  name ? "cage-windows",
   runCommand,
   makeFontsConf,
   dejavu_fonts,
@@ -18,7 +20,7 @@
 let
   fonts = makeFontsConf { fontDirectories = [ dejavu_fonts ]; };
 in
-runCommand "cage-windows"
+runCommand name
   {
     nativeBuildInputs = [
       cage
@@ -29,17 +31,21 @@ runCommand "cage-windows"
   }
   ''
     export XDG_RUNTIME_DIR=$TMPDIR/xdg WLR_BACKENDS=headless WLR_RENDERER=pixman \
-      WLR_LIBINPUT_NO_DEVICES=1 FONTCONFIG_FILE=${fonts}
+      WLR_LIBINPUT_NO_DEVICES=1 FONTCONFIG_FILE=${fonts} \
+      ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1
     mkdir -m 700 "$XDG_RUNTIME_DIR"
 
     fail() {
       echo "FAIL: $*" >&2
-      for f in watch.log cage.log foot.log xeyes.log wish.log; do
+      for f in watch.log windows.log cage.log foot.log xeyes.log wish.log; do
         echo "--- $f" >&2
         cat "$f" >&2 || true
       done
       exit 1
     }
+    # Every call's stderr goes to a log the final check scans. UBSan prints
+    # its report and carries on, so the exit status does not show it.
+    panoptes-windows() { command panoptes-windows "$@" 2>> windows.log; }
     # within N CMD...: retry CMD for up to N tenths of a second.
     within() {
       n=$1
@@ -58,10 +64,12 @@ runCommand "cage-windows"
     latest() { grep -F "$1" watch.log | tail -n 1 | grep -Eq "$2"; }
 
     cage -r 1024x768 2> cage.log &
+    cage=$!
     within 100 test -S "$XDG_RUNTIME_DIR/wayland-0" || fail "no Wayland socket"
     export WAYLAND_DISPLAY=wayland-0
 
     panoptes-windows watch > watch.log &
+    watcher=$!
     display=$(panoptes-windows | sed -n 's/^xwayland display=//p')
     [ -n "$display" ] || fail "no Xwayland display announced"
     [ "$(panoptes-windows | grep -c '^window')" = 0 ] || fail "windows before any client"
@@ -115,6 +123,22 @@ runCommand "cage-windows"
     within 100 latest 'title="dialog"' "box=312,234,400x300 " ||
       fail "the dialog did not take 400x300, centered"
     latest 'title="main"' "box=0,0,1024x768 " || fail "the main window left the screen's size"
+
+    # Cage shuts down on SIGTERM. The watcher ends when Cage's socket closes,
+    # with status 0. Under ASan, each one's exit runs the leak check.
+    exec 3>&-
+    kill "$foot"
+    kill -TERM "$cage"
+    (sleep 30 && kill -KILL "$cage" "$watcher") &
+    watchdog=$!
+    wait "$cage" && status=0 || status=$?
+    wait "$watcher" && watcher_status=0 || watcher_status=$?
+    kill "$watchdog" 2>/dev/null || true
+    [ "$status" = 0 ] || fail "Cage exited with status $status after SIGTERM"
+    [ "$watcher_status" = 0 ] || fail "the watcher exited with status $watcher_status"
+    if grep -Eq 'ERROR: (Address|Leak)Sanitizer|runtime error:' cage.log windows.log; then
+      fail "a sanitizer reported an error"
+    fi
 
     touch "$out"
   ''
