@@ -4,7 +4,8 @@
 //!
 //! ```text
 //! <root>/<agent>/desk    the agent's panoptes-desk; never frozen
-//! <root>/<agent>/kiosk   Cage and Chromium; frozen, reclaimed, weighted here
+//! <root>/<agent>/kiosk   Cage, Xwayland, and the agent's programs; frozen,
+//!                        reclaimed, weighted here
 //! ```
 //!
 //! Protocol: one JSON object per line on a unix socket.
@@ -34,8 +35,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
 const USAGE: &str = "usage: panoptes-resd [--root DIR] [--socket PATH] [--state FILE] \
-[--park-after-ms N] [--mem-low-mib N] [--mem-critical-mib N] [--swap-low-mib N]
-[--evict-batch N] [--tick-ms N] [--park-jobs N]
+[--park-after-ms N] [--mem-low-mib N] [--tick-ms N] [--park-jobs N]
 
   --root DIR         cgroup holding one directory per agent
                      (default /sys/fs/cgroup/panoptes.slice)
@@ -43,10 +43,6 @@ const USAGE: &str = "usage: panoptes-resd [--root DIR] [--socket PATH] [--state 
   --state FILE       residency state across restarts (default /run/panoptes/resd.state)
   --park-after-ms N  park an agent after it waits this long (default 30000)
   --mem-low-mib N    park waiting agents early below this MemAvailable (default 4096)
-  --mem-critical-mib N  evict the longest-parked agents below this MemAvailable
-                     (default 2048)
-  --swap-low-mib N   evict them below this SwapFree too (default 4096)
-  --evict-batch N    agents evicted per tick (default 4)
   --tick-ms N        discovery and policy period (default 1000)
   --park-jobs N      parks running at once (default 4)";
 
@@ -81,9 +77,6 @@ fn parse() -> Result<Args, String> {
             "--state" => a.state = val()?.into(),
             "--park-after-ms" => a.cfg.park_after = num(val()?)?,
             "--mem-low-mib" => a.cfg.mem_low = num(val()?)? << 20,
-            "--mem-critical-mib" => a.cfg.mem_critical = num(val()?)? << 20,
-            "--swap-low-mib" => a.cfg.swap_low = num(val()?)? << 20,
-            "--evict-batch" => a.cfg.evict_batch = num(val()?)?.max(1) as usize,
             "--tick-ms" => a.tick = Duration::from_millis(num(val()?)?),
             "--park-jobs" => a.park_jobs = num(val()?)?.max(1) as usize,
             "-h" | "--help" => return Err(USAGE.into()),
@@ -238,11 +231,6 @@ async fn apply(sh: &Arc<Shared>, agent: &str, actions: Vec<Action>) -> Result<f6
                         .map_err(|e| format!("cpu.weight: {e}"))?;
                 }
                 Action::Park(_) => park(&sh2, &name, &kiosk)?,
-                Action::Evict(_) => {
-                    kiosk.kill_all().map_err(|e| format!("cgroup.kill: {e}"))?;
-                    eprintln!("panoptes-resd: evicted {name}");
-                    sh2.note(&name, "parked", "evicted", 0.0, json!({}));
-                }
             }
         }
         Ok(ms(start.elapsed()))
@@ -383,20 +371,12 @@ async fn ticker(sh: Arc<Shared>, saved: HashMap<String, State>) {
         discover(&sh, &saved);
         let Ok(actions) = sh.handle(Event::Tick {
             mem_available: mem_available(),
-            swap_free: swap_free(),
         }) else {
             continue;
         };
         for act in actions {
-            match act {
-                Action::Park(agent) => spawn_park(&sh, agent),
-                Action::Evict(agent) => {
-                    let sh = sh.clone();
-                    tokio::spawn(async move {
-                        let _ = apply(&sh, &agent, vec![Action::Evict(agent.clone())]).await;
-                    });
-                }
-                _ => {}
+            if let Action::Park(agent) = act {
+                spawn_park(&sh, agent);
             }
         }
     }

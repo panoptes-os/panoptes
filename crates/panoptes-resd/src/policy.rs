@@ -8,10 +8,9 @@
 //!    └─acquire─> acting ┘  └──────────acquire──────────┬─────┘
 //!                  ^                                    │
 //!                  └──────────────(thaw)────────────────┘
-//! evicted: the kiosk has no processes; acquire fails until it runs again.
-//! Below mem_critical MemAvailable or swap_low SwapFree, the longest-parked
-//! kiosks are killed into evicted, since a full zswap pool cannot be freed
-//! with writeback off.
+//! evicted: the kiosk has no processes (it exited, or something outside
+//! resd killed it); acquire fails until it runs again. resd never kills a
+//! kiosk itself, because nothing relaunches one yet.
 //! ```
 
 use std::collections::BTreeMap;
@@ -83,10 +82,9 @@ pub enum Event {
     Release {
         agent: String,
     },
-    /// Periodic check, with the host's MemAvailable and SwapFree in bytes.
+    /// Periodic check, with the host's MemAvailable in bytes.
     Tick {
         mem_available: u64,
-        swap_free: u64,
     },
 }
 
@@ -97,8 +95,6 @@ pub enum Action {
     /// Reclaim a frozen kiosk into zswap with writeback off.
     Park(String),
     Weight(String, u16),
-    /// Kill every process in the kiosk; its profile stays on disk.
-    Evict(String),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -109,13 +105,6 @@ pub struct Config {
     pub mem_low: u64,
     /// Agents parked early per tick while memory is low.
     pub pressure_batch: usize,
-    /// Below this MemAvailable, evict the longest-parked agents.
-    pub mem_critical: u64,
-    /// Below this SwapFree, evict too: a park needs a swap slot for each
-    /// page it compresses, and without one the page stays resident.
-    pub swap_low: u64,
-    /// Agents evicted per tick while memory or swap is critical.
-    pub evict_batch: usize,
     pub weight_acting: u16,
     pub weight_idle: u16,
 }
@@ -126,9 +115,6 @@ impl Default for Config {
             park_after: 30_000,
             mem_low: 4 << 30,
             pressure_batch: 8,
-            mem_critical: 2 << 30,
-            swap_low: 4 << 30,
-            evict_batch: 4,
             weight_acting: 10_000,
             weight_idle: 100,
         }
@@ -224,23 +210,7 @@ impl Policy {
                     self.set(&agent, State::Waiting, now);
                 }
             }
-            Event::Tick {
-                mem_available,
-                swap_free,
-            } => {
-                if mem_available < self.cfg.mem_critical || swap_free < self.cfg.swap_low {
-                    let mut parked: Vec<(Ms, String)> = self
-                        .agents
-                        .iter()
-                        .filter(|(_, a)| a.state == State::Parked)
-                        .map(|(n, a)| (a.since, n.clone()))
-                        .collect();
-                    parked.sort();
-                    for (_, n) in parked.into_iter().take(self.cfg.evict_batch) {
-                        out.push(Action::Evict(n.clone()));
-                        self.set(&n, State::Evicted, now);
-                    }
-                }
+            Event::Tick { mem_available } => {
                 let mut waiting: Vec<(Ms, String)> = self
                     .agents
                     .iter()
@@ -300,9 +270,6 @@ mod tests {
             park_after: 1_000,
             mem_low: 2 * GIB,
             pressure_batch: 2,
-            mem_critical: GIB,
-            swap_low: GIB,
-            evict_batch: 1,
             ..Config::default()
         });
         for (i, name) in ["a", "b", "c"].iter().enumerate() {
@@ -333,18 +300,7 @@ mod tests {
     }
 
     fn tick(p: &mut Policy, mem: u64, now: Ms) -> Vec<Action> {
-        tick_swap(p, mem, 100 * GIB, now)
-    }
-
-    fn tick_swap(p: &mut Policy, mem: u64, swap: u64, now: Ms) -> Vec<Action> {
-        p.handle(
-            Event::Tick {
-                mem_available: mem,
-                swap_free: swap,
-            },
-            now,
-        )
-        .unwrap()
+        p.handle(Event::Tick { mem_available: mem }, now).unwrap()
     }
 
     #[test]
@@ -407,30 +363,22 @@ mod tests {
     }
 
     #[test]
-    fn critical_memory_evicts_longest_parked_first() {
+    fn no_memory_left_parks_early_and_never_kills() {
         let mut p = policy();
         rel(&mut p, "b", 10);
         rel(&mut p, "a", 20);
         tick(&mut p, 100 * GIB, 1_010);
         tick(&mut p, 100 * GIB, 1_020);
         rel(&mut p, "c", 1_030);
-        // Above the floors nothing is evicted.
-        assert!(tick(&mut p, 100 * GIB, 1_040).is_empty());
-        // Below mem_critical: one per tick, oldest park first; the waiting
-        // agent is parked early, not killed.
+        // With no memory left, the waiting agent is parked early and the
+        // parked ones stay parked.
+        assert_eq!(tick(&mut p, 0, 1_040), vec![Action::Park("c".into())]);
+        for n in ["a", "b", "c"] {
+            assert_eq!(state(&p, n), State::Parked);
+        }
         assert_eq!(
-            tick(&mut p, GIB / 2, 1_050),
-            vec![Action::Evict("b".into()), Action::Park("c".into())]
-        );
-        assert_eq!(state(&p, "b"), State::Evicted);
-        // Low swap alone also evicts.
-        assert_eq!(
-            tick_swap(&mut p, 100 * GIB, GIB / 2, 1_060),
-            vec![Action::Evict("a".into())]
-        );
-        assert_eq!(
-            p.handle(Event::Acquire { agent: "a".into() }, 1_070),
-            Err(Refusal::Evicted)
+            acq(&mut p, "a", 1_050),
+            vec![Action::Thaw("a".into()), Action::Weight("a".into(), 10_000)]
         );
     }
 
