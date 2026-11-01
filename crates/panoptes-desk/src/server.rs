@@ -1,4 +1,13 @@
-//! The desk's two front ends on one unix socket.
+//! The desk's network edge: the internal protocol and MCP on one unix
+//! socket, and MCP on stdio with `--mcp-stdio`. The only async code in the
+//! desk. It runs on one thread with a current-thread tokio runtime, turns
+//! each request into an [`owner::Call`], and awaits the desk thread's
+//! reply:
+//!
+//! ```text
+//! socket, stdio ─> rmcp / lines ─> Call ── std mpsc ──> desk thread
+//!                        ^────────────── tokio oneshot ──┘
+//! ```
 //!
 //! A connection's first line picks the protocol. MCP clients open with a
 //! JSON-RPC `initialize`, so a line carrying `"jsonrpc"` starts an MCP
@@ -12,7 +21,9 @@
 //!
 //! A reply with a screenshot adds `"image":{"mime":"image/png","data":"<base64>"}`.
 
-use crate::desk::{Desk, Output, tools};
+use crate::desk::{MAX_WAIT_MS, Output, tools};
+use crate::owner::{Call, Reply};
+use panoptes_sync::mpsc;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
     Implementation, InitializeResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
@@ -21,13 +32,101 @@ use rmcp::model::{
 use rmcp::service::{MaybeSendFuture, RequestContext, RoleServer};
 use rmcp::{ServerHandler, ServiceExt};
 use serde_json::{Value, json};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use std::time::{Duration, Instant};
+use tokio::io::{
+    AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
+};
 use tokio::net::UnixListener;
 
-pub async fn listen(desk: Arc<Desk>, path: &Path) -> std::io::Result<()> {
+/// How long an edge waits for the desk thread's reply. One call takes at
+/// most 2 waits of `MAX_WAIT_MS` (a timeout, then settling), 15 s with
+/// resd and 5 s per capture; calls queued ahead add theirs.
+const REPLY_LIMIT: Duration = Duration::from_millis(3 * MAX_WAIT_MS);
+
+/// The longest request line the internal protocol takes.
+const MAX_LINE: u64 = 4 << 20;
+
+/// A way to the desk thread, for every edge task.
+#[derive(Debug, Clone)]
+pub struct Handle {
+    calls: mpsc::Sender<Call<Output>>,
+}
+
+impl Handle {
+    pub fn new(calls: mpsc::Sender<Call<Output>>) -> Handle {
+        Handle { calls }
+    }
+
+    /// Run one tool on the desk thread.
+    pub async fn call(&self, tool: &str, args: Value) -> Result<Output, String> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let reply: Reply<Output> = Box::new(move |r| {
+            let _ = tx.send(r);
+        });
+        let call = Call {
+            tool: tool.to_owned(),
+            args,
+            reply,
+        };
+        self.calls
+            .send(call)
+            .map_err(|_| "the desk thread is gone".to_owned())?;
+        match tokio::time::timeout(REPLY_LIMIT, rx).await {
+            Ok(Ok(reply)) => reply,
+            Ok(Err(_)) => Err("the desk thread dropped the call".to_owned()),
+            Err(_) => Err(format!(
+                "the desk thread did not reply in {} s",
+                REPLY_LIMIT.as_secs()
+            )),
+        }
+    }
+}
+
+/// Serve the socket, and stdio with `mcp_stdio`, until SIGTERM, SIGINT,
+/// the end of stdio, or a socket error. Returns the exit code.
+pub fn run(handle: Handle, socket: PathBuf, mcp_stdio: bool) -> i32 {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    let code = rt.block_on(async {
+        let listen = listen(handle.clone(), &socket);
+        eprintln!("panoptes-desk: tools on {}", socket.display());
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("SIGTERM handler");
+        let stdio = async {
+            if mcp_stdio {
+                serve_mcp(handle.clone(), tokio::io::stdin(), tokio::io::stdout()).await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        };
+        tokio::select! {
+            r = listen => {
+                eprintln!("panoptes-desk: socket: {r:?}");
+                1
+            }
+            _ = stdio => 0,
+            _ = tokio::signal::ctrl_c() => 0,
+            _ = term.recv() => 0,
+        }
+    });
+    let _ = std::fs::remove_file(&socket);
+    code
+}
+
+/// One line of at most [`MAX_LINE`] bytes into `line`; false at the end of
+/// the stream or past the limit.
+async fn read_line<R: AsyncBufRead + Unpin>(read: &mut R, line: &mut String) -> bool {
+    match (&mut *read).take(MAX_LINE).read_line(line).await {
+        Ok(0) | Err(_) => false,
+        Ok(n) => line.ends_with('\n') || (n as u64) < MAX_LINE,
+    }
+}
+
+async fn listen(handle: Handle, path: &Path) -> std::io::Result<()> {
     let _ = std::fs::remove_file(path);
     let listener = UnixListener::bind(path)?;
     {
@@ -36,45 +135,45 @@ pub async fn listen(desk: Arc<Desk>, path: &Path) -> std::io::Result<()> {
     }
     loop {
         let (stream, _) = listener.accept().await?;
-        let desk = desk.clone();
+        let handle = handle.clone();
         tokio::spawn(async move {
             let (read, write) = stream.into_split();
             let mut read = BufReader::new(read);
             let mut first = String::new();
-            if read.read_line(&mut first).await.unwrap_or(0) == 0 {
+            if !read_line(&mut read, &mut first).await {
                 return;
             }
             if first.contains("\"jsonrpc\"") {
                 let replay = std::io::Cursor::new(first.into_bytes()).chain(read);
-                serve_mcp(desk, replay, write).await;
+                serve_mcp(handle, replay, write).await;
             } else {
-                serve_lines(desk, first, read, write).await;
+                serve_lines(handle, first, read, write).await;
             }
         });
     }
 }
 
-async fn serve_lines<R, W>(desk: Arc<Desk>, first: String, mut read: BufReader<R>, mut write: W)
+async fn serve_lines<R, W>(handle: Handle, first: String, mut read: BufReader<R>, mut write: W)
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
     let mut line = first;
     loop {
-        let reply = handle_line(&desk, line.trim()).await;
+        let reply = handle_line(&handle, line.trim()).await;
         let mut out = reply.to_string();
         out.push('\n');
         if write.write_all(out.as_bytes()).await.is_err() {
             return;
         }
         line = String::new();
-        if read.read_line(&mut line).await.unwrap_or(0) == 0 {
+        if !read_line(&mut read, &mut line).await {
             return;
         }
     }
 }
 
-async fn handle_line(desk: &Desk, line: &str) -> Value {
+async fn handle_line(handle: &Handle, line: &str) -> Value {
     let req: Value = match serde_json::from_str(line) {
         Ok(v) => v,
         Err(e) => return json!({ "ok": false, "error": format!("bad request: {e}") }),
@@ -92,7 +191,7 @@ async fn handle_line(desk: &Desk, line: &str) -> Value {
     }
     let args = req.get("args").cloned().unwrap_or_else(|| json!({}));
     let start = Instant::now();
-    match desk.call(tool, &args).await {
+    match handle.call(tool, args).await {
         Ok(out) => reply(id, out, start),
         Err(e) => json!({ "id": id, "ok": false, "error": e,
             "timing": { "total_ms": total(start) } }),
@@ -125,12 +224,12 @@ fn reply(id: Value, out: Output, start: Instant) -> Value {
 
 /// MCP server over any byte stream: the socket after its first line, or
 /// stdio.
-pub async fn serve_mcp<R, W>(desk: Arc<Desk>, read: R, write: W)
+async fn serve_mcp<R, W>(handle: Handle, read: R, write: W)
 where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    let server = DeskMcp { desk };
+    let server = DeskMcp { handle };
     match server.serve((read, write)).await {
         Ok(running) => {
             let _ = running.waiting().await;
@@ -141,7 +240,7 @@ where
 
 #[derive(Clone)]
 struct DeskMcp {
-    desk: Arc<Desk>,
+    handle: Handle,
 }
 
 impl ServerHandler for DeskMcp {
@@ -181,14 +280,14 @@ impl ServerHandler for DeskMcp {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<CallToolResponse, ErrorData>> + MaybeSendFuture + '_ {
-        let desk = self.desk.clone();
+        let handle = self.handle.clone();
         async move {
             let args = request
                 .arguments
                 .map(Value::Object)
                 .unwrap_or_else(|| json!({}));
             let start = Instant::now();
-            let result = match desk.call(&request.name, &args).await {
+            let result = match handle.call(&request.name, args).await {
                 Ok(out) => {
                     let mut text = json!({ "result": out.result, "timing": timing(&out, start) });
                     if out.png.is_some() {

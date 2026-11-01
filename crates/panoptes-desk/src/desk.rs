@@ -1,5 +1,6 @@
-//! The tools an agent drives its desktop with. Both front ends, the
-//! internal socket protocol and MCP, call [`Desk::call`].
+//! The tools an agent drives its desktop with. They run on the desk thread
+//! ([`crate::owner`]), one call at a time; both edges, the internal socket
+//! protocol and MCP, send it their calls.
 //!
 //! Coordinates are output pixels, the pixels of every screenshot. Tools
 //! that act wait for the screen to settle, then report it:
@@ -11,14 +12,17 @@
 //!   <- {settled_ms, timed_out, windows: {opened, closed, focused}} + PNG
 //! ```
 
+use crate::handoff::{self, Change, Waited};
 use crate::keymap::{Keymap, Step};
 use crate::kiosk::Kiosk;
-use crate::resd::Residency;
-use crate::wl::{Frame, Window, Windows, Wl};
+use crate::owner;
+use crate::settle::{Next, Saw, Settle};
+use crate::windows::{Window, Windows, report};
+use crate::wl::{Frame, Wl};
 use base64::Engine;
+use panoptes_sync::{self as sync, mpsc};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// A tool's result: JSON for the caller, the screen when the tool shows
@@ -42,20 +46,27 @@ const SETTLE_MS: u64 = 3000;
 const TIMEOUT_MS: u64 = 10_000;
 const SCROLL_NOTCHES: i32 = 3;
 
+/// The longest wait any argument may ask for. It bounds every call, so an
+/// edge's wait for a reply can have a limit.
+pub const MAX_WAIT_MS: u64 = 600_000;
+
 fn ms(d: Duration) -> f64 {
     (d.as_secs_f64() * 1e5).round() / 100.0
 }
 
+/// Everything the tools drive. The desk thread owns it.
 #[derive(Debug)]
 pub struct Desk {
     wl: Wl,
-    kiosk: Arc<Kiosk>,
-    /// One tool at a time; the keymap the compositor holds goes with the
-    /// turn.
-    turn: tokio::sync::Mutex<Keymap>,
-    residency: Option<Arc<Residency>>,
+    kiosk: Kiosk,
+    /// The keymap the compositor holds.
+    keymap: Keymap,
+    /// Wake-ups for waits: window changes, exits, loss.
+    changes: mpsc::Receiver<Change>,
+    /// Where a launched process's reaper reports its exit.
+    exits: mpsc::Sender<Change>,
     /// Small captures for `panoptes top`, off unless set.
-    thumb: Mutex<Option<Thumb>>,
+    thumb: Option<Thumb>,
 }
 
 /// Where and how often the desk writes a thumbnail: a base64 PNG at a
@@ -120,7 +131,8 @@ and parent (the window a dialog belongs to). Also Xwayland's DISPLAY.",
         (
             "key",
             "Press a key or chord on the focused window: Return, Escape, Tab, BackSpace, Page_Down, \
-F5, ctrl+s, ctrl+shift+t, alt+F4, super, ... Names are xkb keysym names, case-insensitive.",
+F5, ctrl+s, ctrl+shift+t, alt+F4, super, ... Names are xkb keysym names, case-insensitive; \
+a single character is that character, so A is shift+a.",
             json!({ "type": "object", "required": ["key"], "properties": {
                 "key": { "type": "string" } } }),
         ),
@@ -206,7 +218,11 @@ fn arg_u64(a: &Value, k: &str, default: u64) -> Result<u64, String> {
 }
 
 fn arg_ms(a: &Value, k: &str, default: u64) -> Result<Duration, String> {
-    arg_u64(a, k, default).map(Duration::from_millis)
+    let ms = arg_u64(a, k, default)?;
+    if ms > MAX_WAIT_MS {
+        return Err(format!("{k} is at most {MAX_WAIT_MS}"));
+    }
+    Ok(Duration::from_millis(ms))
 }
 
 fn arg_bool(a: &Value, k: &str, default: bool) -> Result<bool, String> {
@@ -250,69 +266,43 @@ struct Settled {
 }
 
 impl Desk {
-    pub async fn new(
+    /// Upload the keymap the tools start with.
+    pub fn new(
         wl: Wl,
-        kiosk: Arc<Kiosk>,
-        residency: Option<Arc<Residency>>,
-    ) -> Result<Arc<Desk>, String> {
+        kiosk: Kiosk,
+        changes: mpsc::Receiver<Change>,
+        exits: mpsc::Sender<Change>,
+    ) -> Result<Desk, String> {
         let keymap = Keymap::default();
-        wl.keymap(&keymap.text()).await?;
-        Ok(Arc::new(Desk {
+        wl.keymap(&keymap.text())?;
+        Ok(Desk {
             wl,
             kiosk,
-            turn: tokio::sync::Mutex::new(keymap),
-            residency,
-            thumb: Mutex::new(None),
-        }))
-    }
-
-    /// Run one tool. With a residency manager, the kiosk is acquired first
-    /// and released once calls stop for the grace period.
-    pub async fn call(&self, tool: &str, args: &Value) -> Result<Output, String> {
-        let woke = match &self.residency {
-            Some(res) => Some(res.acquire().await),
-            None => None,
-        };
-        let out = {
-            let mut keymap = self.turn.lock().await;
-            let out = self.call_tool(&mut keymap, tool, args).await;
-            self.thumb_if_due().await;
-            out
-        };
-        if let Some(res) = &self.residency {
-            res.release_later();
-        }
-        out.map(|mut o| {
-            o.wake_ms = woke.filter(|w| w.woke).map(|w| w.ms);
-            o
+            keymap,
+            changes,
+            exits,
+            thumb: None,
         })
     }
 
     /// Write a thumbnail every `every` to `path` (written as `path.tmp`, then
     /// renamed).
-    pub fn set_thumb(&self, path: PathBuf, every: Duration) {
-        if let Ok(mut t) = self.thumb.lock() {
-            *t = Some(Thumb {
-                path,
-                every,
-                last: None,
-            });
-        }
+    pub fn set_thumb(&mut self, path: PathBuf, every: Duration) {
+        self.thumb = Some(Thumb {
+            path,
+            every,
+            last: None,
+        });
     }
 
-    async fn thumb_if_due(&self) {
-        let path = {
-            let Ok(mut guard) = self.thumb.lock() else {
-                return;
-            };
-            let Some(t) = guard.as_mut() else { return };
-            if t.last.is_some_and(|l| l.elapsed() < t.every) {
-                return;
-            }
-            t.last = Some(Instant::now());
-            t.path.clone()
-        };
-        let Ok(frame) = self.wl.screenshot().await else {
+    fn thumb_if_due(&mut self) {
+        let Some(t) = self.thumb.as_mut() else { return };
+        if t.last.is_some_and(|l| l.elapsed() < t.every) {
+            return;
+        }
+        t.last = Some(Instant::now());
+        let path = t.path.clone();
+        let Ok(frame) = self.wl.screenshot() else {
             return;
         };
         let Ok(png) = encode_png(&shrink(&frame, 10)) else {
@@ -325,17 +315,13 @@ impl Desk {
         }
     }
 
-    async fn call_tool(
-        &self,
-        keymap: &mut Keymap,
-        tool: &str,
-        args: &Value,
-    ) -> Result<Output, String> {
+    fn call_tool(&mut self, tool: &str, args: &Value) -> Result<Output, String> {
         self.wl.alive()?;
+        handoff::drain(&self.changes);
         let start = Instant::now();
         match tool {
             "screenshot" => {
-                let frame = self.wl.screenshot().await?;
+                let frame = self.wl.screenshot()?;
                 let result = json!({ "width": frame.width, "height": frame.height });
                 output(result, Some((frame, start)), start)
             }
@@ -351,15 +337,15 @@ impl Desk {
                 let limit = arg_ms(args, "settle_ms", SETTLE_MS)?;
 
                 let before = self.wl.windows();
-                let mut result = self.act(keymap, tool, args, &before).await?;
-                let settled = self.settle(quiet, limit).await?;
+                let mut result = self.act(tool, args, &before)?;
+                let settled = self.settle(quiet, limit)?;
                 self.report(&mut result, &settled, &before);
 
                 let shot = Instant::now();
                 let frame = match (screenshot, settled.frame) {
                     (false, _) => None,
                     (true, Some(f)) => Some(f),
-                    (true, None) => Some(self.wl.screenshot().await?),
+                    (true, None) => Some(self.wl.screenshot()?),
                 };
                 output(result, frame.map(|f| (f, shot)), start)
             }
@@ -367,13 +353,7 @@ impl Desk {
     }
 
     /// Do what an acting tool asks; return its own result fields.
-    async fn act(
-        &self,
-        keymap: &mut Keymap,
-        tool: &str,
-        args: &Value,
-        before: &Windows,
-    ) -> Result<Value, String> {
+    fn act(&mut self, tool: &str, args: &Value, before: &Windows) -> Result<Value, String> {
         let wl = &self.wl;
         match tool {
             "click" => {
@@ -403,7 +383,7 @@ impl Desk {
                 wl.button(button, true);
                 wl.flush()?;
                 for i in 1..=STEPS {
-                    tokio::time::sleep(Duration::from_millis(16)).await;
+                    std::thread::sleep(Duration::from_millis(16));
                     let lerp = |a: u32, b: u32| {
                         (f64::from(a)
                             + (f64::from(b) - f64::from(a)) * f64::from(i) / f64::from(STEPS))
@@ -429,26 +409,26 @@ impl Desk {
                 wl.flush()?;
             }
             "key" => {
-                let events = keymap.chord(arg_str(args, "key")?)?;
+                let events = self.keymap.chord(arg_str(args, "key")?)?;
                 wl.keys(&events);
                 wl.flush()?;
             }
             "type" => {
-                for step in keymap.type_text(arg_str(args, "text")?)? {
+                for step in self.keymap.type_text(arg_str(args, "text")?)? {
                     match step {
-                        Step::Keymap(text) => wl.keymap(&text).await?,
+                        Step::Keymap(text) => wl.keymap(&text)?,
                         Step::Keys(events) => {
                             // A sync per chunk keeps long text from
                             // overrunning the socket.
                             for chunk in events.chunks(256) {
                                 wl.keys(chunk);
-                                wl.sync().await?;
+                                wl.sync()?;
                             }
                         }
                     }
                 }
             }
-            "launch" => return self.launch(args, before).await,
+            "launch" => return self.launch(args, before),
             "focus" => wl.activate(arg_id(args, "window")?)?,
             "close" => wl.close(arg_id(args, "window")?)?,
             "kill" => {
@@ -471,7 +451,7 @@ impl Desk {
                 self.kiosk.kill(pid)?;
                 return Ok(json!({ "pid": pid }));
             }
-            "wait" => return self.wait(args).await,
+            "wait" => return self.wait(args),
             other => return Err(format!("unknown tool {other}")),
         }
         Ok(json!({}))
@@ -493,7 +473,7 @@ impl Desk {
     }
 
     /// Start a program and wait for a new window, its exit, or the timeout.
-    async fn launch(&self, args: &Value, before: &Windows) -> Result<Value, String> {
+    fn launch(&mut self, args: &Value, before: &Windows) -> Result<Value, String> {
         let argv: Vec<String> = args
             .get("argv")
             .and_then(Value::as_array)
@@ -513,51 +493,48 @@ impl Desk {
         };
         let timeout = arg_ms(args, "timeout_ms", TIMEOUT_MS)?;
 
-        let mut changes = self.wl.window_changes();
         let (child, log) = self.kiosk.launch(&argv, &env, before.xwayland.as_deref())?;
         let pid = child.pid();
-        let (exit_tx, mut exit_rx) = tokio::sync::oneshot::channel();
-        tokio::task::spawn_blocking(move || {
-            let _ = exit_tx.send(child.wait());
+        // The reaper outlives the call when the program keeps running.
+        let exits = self.exits.clone();
+        sync::spawn(&format!("reap-{pid}"), move || {
+            let status = child.wait().ok();
+            let _ = exits.send(Change::Exited { pid, status });
         });
 
-        let deadline = tokio::time::Instant::now() + timeout;
-        let mut exited = false;
-        loop {
-            let opened = self
-                .wl
+        let deadline = sync::now() + timeout.as_millis() as u64;
+        let wl = &self.wl;
+        let waited = handoff::wait_for(&self.changes, Some(deadline), |change| {
+            // A launcher may exit cleanly once its app is up.
+            if let Some(&Change::Exited { pid: p, status }) = change
+                && p == pid
+                && status != Some(0)
+            {
+                return Some(Err(format!(
+                    "{} exited ({}) before opening a window; {}:\n{}",
+                    argv[0],
+                    describe_status(status),
+                    log.display(),
+                    tail(&log, 20),
+                )));
+            }
+            let opened = wl
                 .windows()
                 .list
                 .iter()
                 .any(|w| !before.list.iter().any(|b| b.id == w.id));
-            if opened {
-                break;
-            }
-            tokio::select! {
-                _ = changes.changed() => {}
-                status = &mut exit_rx, if !exited => {
-                    exited = true;
-                    let status = status.ok().and_then(Result::ok);
-                    // A launcher may exit cleanly once its app is up.
-                    if status != Some(0) {
-                        return Err(format!(
-                            "{} exited ({}) before opening a window; {}:\n{}",
-                            argv[0],
-                            describe_status(status),
-                            log.display(),
-                            tail(&log, 20),
-                        ));
-                    }
-                }
-                _ = tokio::time::sleep_until(deadline) => break,
-            }
+            opened.then_some(Ok(()))
+        });
+        match waited {
+            Waited::Met(Err(e)) => Err(e),
+            Waited::Met(Ok(())) | Waited::Timer => Ok(json!({ "pid": pid })),
+            Waited::Lost => self.wl.alive().map(|()| json!({ "pid": pid })),
         }
-        Ok(json!({ "pid": pid }))
     }
 
     /// Wait until a window matches the filters (or, with closed, none
     /// does), or the timeout.
-    async fn wait(&self, args: &Value) -> Result<Value, String> {
+    fn wait(&self, args: &Value) -> Result<Value, String> {
         let app_id = arg(args, "app_id", "a string", Value::as_str)?;
         let title = arg(args, "title", "a string", Value::as_str)?;
         let pid = arg(args, "pid", "a whole number", Value::as_i64)?;
@@ -571,74 +548,82 @@ impl Desk {
                 && title.is_none_or(|t| w.title.contains(t))
                 && pid.is_none_or(|p| i64::from(w.pid) == p)
         };
-        let deadline = tokio::time::Instant::now() + timeout;
-        let mut changes = self.wl.window_changes();
-        loop {
-            let found = self.wl.windows().list.into_iter().find(|w| matches(w));
-            let met = found.is_some() != closed;
-            if met {
-                return Ok(json!({ "met": true, "window": found.as_ref().map(window_json) }));
+        let find = || self.wl.windows().list.into_iter().find(|w| matches(w));
+        let deadline = sync::now() + timeout.as_millis() as u64;
+        let waited = handoff::wait_for(&self.changes, Some(deadline), |_| {
+            let found = find();
+            (found.is_some() != closed).then_some(found)
+        });
+        match waited {
+            Waited::Met(found) => {
+                Ok(json!({ "met": true, "window": found.as_ref().map(window_json) }))
             }
-            tokio::select! {
-                _ = changes.changed() => {}
-                _ = tokio::time::sleep_until(deadline) => {
-                    return Ok(json!({ "met": false, "window": found.as_ref().map(window_json) }));
-                }
+            Waited::Timer => {
+                Ok(json!({ "met": false, "window": find().as_ref().map(window_json) }))
             }
-            self.wl.alive()?;
+            Waited::Lost => self.wl.alive().map(|()| json!({ "met": false })),
         }
     }
 
     /// Add how the screen settled and the window changes since `before` to
     /// an acting tool's result.
     fn report(&self, result: &mut Value, settled: &Settled, before: &Windows) {
-        let now = self.wl.windows();
-        let opened: Vec<Value> = now
-            .list
-            .iter()
-            .filter(|w| !before.list.iter().any(|b| b.id == w.id))
-            .map(window_json)
-            .collect();
-        let closed: Vec<u32> = before
-            .list
-            .iter()
-            .filter(|b| !now.list.iter().any(|w| w.id == b.id))
-            .map(|b| b.id)
-            .collect();
-        let focused = now.list.iter().find(|w| w.focused).map(|w| w.id);
+        let r = report(before, &self.wl.windows());
+        let opened: Vec<Value> = r.opened.iter().map(window_json).collect();
         result["settled_ms"] = json!(settled.ms);
         result["timed_out"] = json!(settled.timed_out);
-        result["windows"] = json!({ "opened": opened, "closed": closed, "focused": focused });
+        result["windows"] = json!({ "opened": opened, "closed": r.closed, "focused": r.focused });
     }
 
     /// Wait until no frame changes the screen for `quiet`, at most `limit`.
-    async fn settle(&self, quiet: Duration, limit: Duration) -> Result<Settled, String> {
+    fn settle(&self, quiet: Duration, limit: Duration) -> Result<Settled, String> {
         let start = Instant::now();
+        let policy = Settle::new(
+            quiet.as_millis() as u64,
+            limit.as_millis() as u64,
+            sync::now(),
+        );
+        let mut saw = None;
         let mut last = None;
         loop {
-            let left = limit.saturating_sub(start.elapsed());
-            let window = quiet.min(left);
-            match self.wl.next_change(window).await? {
-                Some(frame) => last = Some(frame),
-                // A full quiet window passed without a change, so the last
-                // changed frame is still what the screen shows.
-                None if window == quiet => {
+            match policy.next(saw, sync::now()) {
+                Next::Settled => {
                     return Ok(Settled {
                         ms: ms(start.elapsed()),
                         timed_out: false,
                         frame: last,
                     });
                 }
-                None => {}
-            }
-            if start.elapsed() >= limit {
-                return Ok(Settled {
-                    ms: ms(start.elapsed()),
-                    timed_out: true,
-                    frame: None,
-                });
+                Next::TimedOut => {
+                    return Ok(Settled {
+                        ms: ms(start.elapsed()),
+                        timed_out: true,
+                        frame: None,
+                    });
+                }
+                Next::Wait(w) => match self.wl.next_change(Duration::from_millis(w))? {
+                    Some(frame) => {
+                        last = Some(frame);
+                        saw = Some(Saw::Change);
+                    }
+                    None => saw = Some(Saw::Quiet(w)),
+                },
             }
         }
+    }
+}
+
+impl owner::Tools for Desk {
+    type Output = Output;
+
+    fn call(&mut self, tool: &str, args: &Value, wake_ms: Option<f64>) -> Result<Output, String> {
+        let mut out = self.call_tool(tool, args)?;
+        out.wake_ms = wake_ms;
+        Ok(out)
+    }
+
+    fn after(&mut self) {
+        self.thumb_if_due();
     }
 }
 
@@ -720,4 +705,17 @@ fn tail(path: &Path, n: usize) -> String {
     let text = std::fs::read_to_string(path).unwrap_or_default();
     let lines: Vec<&str> = text.lines().collect();
     lines[lines.len().saturating_sub(n)..].join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_wait_past_the_cap_is_refused() {
+        let ok = arg_ms(&json!({ "timeout_ms": MAX_WAIT_MS }), "timeout_ms", 0);
+        assert_eq!(ok, Ok(Duration::from_millis(MAX_WAIT_MS)));
+        let e = arg_ms(&json!({ "timeout_ms": u64::MAX }), "timeout_ms", 0).unwrap_err();
+        assert_eq!(e, "timeout_ms is at most 600000");
+    }
 }
