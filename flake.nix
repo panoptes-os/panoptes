@@ -114,6 +114,9 @@
         desk = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/desk.nix {
           inherit (self.packages.${system}) panoptes cage;
         };
+        resd = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/resd.nix {
+          inherit (self.packages.${system}) panoptes;
+        };
       });
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt);

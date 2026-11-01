@@ -9,8 +9,10 @@ repository.workspace = true
 
 [dependencies]
 panoptes-cgroup.workspace = true
+panoptes-sync.workspace = true
+rustix.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
+signal-hook.workspace = true
 
 [lints]
 workspace = true

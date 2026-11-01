@@ -199,6 +199,13 @@ impl Cgroup {
         self.set_frozen(false, timeout)
     }
 
+    /// What `cgroup.freeze` asks for. The kernel may still be getting there:
+    /// a freeze that timed out asks for frozen while `events().frozen` is
+    /// still false, and the kernel may finish it later.
+    pub fn freeze_target(&self) -> Result<bool> {
+        Ok(self.read_u64("cgroup.freeze")? != 0)
+    }
+
     fn set_frozen(&self, frozen: bool, timeout: Duration) -> Result<Duration> {
         let start = Instant::now();
         let watch = self.watch_events()?;
