@@ -88,6 +88,18 @@
         cage-windows = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/cage-windows.nix {
           inherit (self.packages.${system}) cage;
         };
+        # The same scenario with the fork built under ASan and UBSan.
+        cage-windows-asan = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/cage-windows.nix {
+          name = "cage-windows-asan";
+          cage = self.packages.${system}.cage.overrideAttrs (old: {
+            pname = "cage-asan";
+            mesonFlags = (old.mesonFlags or [ ]) ++ [
+              "-Db_sanitize=address,undefined"
+              "-Db_lundef=false"
+            ];
+            dontStrip = true;
+          });
+        };
         window-protocol = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/window-protocol.nix {
           inherit cage-src;
         };
