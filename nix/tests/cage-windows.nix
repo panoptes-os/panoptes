@@ -1,11 +1,13 @@
-# Cage's panoptes_window_v1 end to end, for a Wayland window (foot) and an
-# X11 one (xeyes): each is listed with its pid, app_id, title and box;
-# focus follows mapping and activate; a title change and a close reach a
+# Cage's panoptes_window end to end, for a Wayland window (foot) and an
+# X11 one (xeyes): each is listed with its pid, app_id, title and box, and
+# foot's window geometry fills the screen; focus follows mapping and
+# activate; a title change and a close reach a
 # client that was watching before the windows mapped, and a client that
 # binds afterwards sees the same state. A Tk dialog gets the size it asks
 # for, centered, before and after it maps; its main window keeps the
-# screen. Cage then exits cleanly on SIGTERM; built with sanitizers, neither
-# it nor panoptes-windows reports a memory error, leak or undefined behavior.
+# screen, and X agrees with where Cage draws the dialog. Cage then exits
+# cleanly on SIGTERM; built with sanitizers, neither it nor panoptes-windows
+# reports a memory error, leak or undefined behavior.
 {
   name ? "cage-windows",
   runCommand,
@@ -13,6 +15,7 @@
   dejavu_fonts,
   cage,
   foot,
+  grim,
   xeyes,
   tk,
 }:
@@ -25,6 +28,7 @@ runCommand name
     nativeBuildInputs = [
       cage
       foot
+      grim
       xeyes
       tk
     ];
@@ -37,7 +41,7 @@ runCommand name
 
     fail() {
       echo "FAIL: $*" >&2
-      for f in watch.log windows.log cage.log foot.log xeyes.log wish.log; do
+      for f in watch.log windows.log cage.log foot.log xeyes.log wish.log wish.out; do
         echo "--- $f" >&2
         cat "$f" >&2 || true
       done
@@ -76,12 +80,21 @@ runCommand name
 
     foot sh -c 'printf "\033]2;agent\007"; exec sleep 600' 2> foot.log &
     foot=$!
-    # foot draws its title bar as a subsurface above its main surface, and
-    # Cage puts the main surface, not the window geometry, at the origin:
-    # the box starts above the screen.
-    win="pid=$foot app_id=\"foot\" title=\"agent\" box=0,-[0-9]+,1024x768 focused=1 parent=0"
+    # foot draws its title bar as a subsurface above its main surface. Its
+    # window geometry, title bar included, fills the screen.
+    win="pid=$foot app_id=\"foot\" title=\"agent\" box=0,0,1024x768 focused=1 parent=0"
     within 100 watched "$win" || fail "the watcher never saw foot's window retitled"
     listed "$win" || fail "a fresh listing disagrees on foot's window"
+    # So foot reaches the bottom row. Cage used to put foot's main surface
+    # at the origin, which pushed the title bar off the top and left the
+    # bottom rows black (upstream Cage issue 254).
+    bottom_lit() {
+      grim -t ppm shot.ppm || return 1
+      header=$(head -n 3 shot.ppm | wc -c)
+      px=$(od -An -tu1 -j $((header + (767 * 1024 + 512) * 3)) -N3 shot.ppm | tr -s ' ')
+      [ "$px" != " 0 0 0" ]
+    }
+    within 50 bottom_lit || fail "the bottom row under foot is black"
 
     DISPLAY=$display xeyes 2> xeyes.log &
     xeyes=$!
@@ -105,9 +118,16 @@ runCommand name
     # Tk, a line at a time. It creates each window at 1x1, then asks for
     # its size.
     mkfifo tk.in
-    DISPLAY=$display wish < tk.in 2> wish.log &
+    DISPLAY=$display wish < tk.in > wish.out 2> wish.log &
     wish=$!
     exec 3> tk.in
+    # x_position X,Y: Tk reports the dialog at X,Y. Xwayland finds the window
+    # under the pointer by X window positions, so X must agree with Cage.
+    x_position() {
+      echo 'update; puts "[winfo rootx .dlg],[winfo rooty .dlg]"; flush stdout' >&3
+      sleep 0.1
+      [ "$(tail -n 1 wish.out)" = "$1" ]
+    }
     echo 'wm title . main; update; toplevel .dlg; wm title .dlg dialog; wm geometry .dlg 300x200; wm transient .dlg .' >&3
     within 100 watched "pid=$wish .* title=\"main\" box=0,0,1024x768 " || fail "the watcher never saw Tk's main window"
     main=$(grep -m1 'title="main"' watch.log | sed 's/^window id=\([0-9]*\) .*/\1/')
@@ -118,10 +138,12 @@ runCommand name
     id=$(grep -m1 'title="main"' fresh | sed 's/^window id=\([0-9]*\) .*/\1/')
     grep -Eq "title=\"dialog\" box=362,284,300x200 focused=1 parent=$id\$" fresh ||
       fail "a fresh listing disagrees on the dialog"
+    within 50 x_position 362,284 || fail "X does not have the dialog at 362,284"
 
     echo 'wm geometry . 200x100; wm geometry .dlg 400x300' >&3
     within 100 latest 'title="dialog"' "box=312,234,400x300 " ||
       fail "the dialog did not take 400x300, centered"
+    within 50 x_position 312,234 || fail "X does not have the dialog at 312,234"
     latest 'title="main"' "box=0,0,1024x768 " || fail "the main window left the screen's size"
 
     # Cage shuts down on SIGTERM. The watcher ends when Cage's socket closes,

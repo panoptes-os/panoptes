@@ -1,4 +1,4 @@
-//! The window list, built from panoptes_window_v1 events. A policy: no I/O,
+//! The window list, built from panoptes_window events. A policy: no I/O,
 //! clock or threads. `H` is the protocol object of a window, which the table
 //! keeps only to hand back.
 //!

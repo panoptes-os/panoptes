@@ -2,9 +2,9 @@
   description = "Panoptes: a harness and orchestrator for graphical AI agents";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-  # Cage 0.3.1 with -r and panoptes_window_v1.
+  # Cage 0.3.1 with -r and panoptes_window.
   inputs.cage-src = {
-    url = "github:panoptes-os/cage/panoptes";
+    url = "github:panoptes-os/cage/base/v0.3.1";
     flake = false;
   };
 
@@ -48,9 +48,25 @@
           pkgs = nixpkgs.legacyPackages.${system};
           panoptes = pkgs.callPackage ./nix/package.nix { };
           cage = pkgs.callPackage ./nix/cage.nix { src = cage-src; };
+          # The fork and its wlroots, built with ASan and UBSan, for the
+          # -asan checks. wlroots too: Cage hands its objects to wlroots, so
+          # Cage's memory errors often surface there, and an uninstrumented
+          # wlroots reads freed memory without a report.
+          sanitize = old: {
+            mesonFlags = (old.mesonFlags or [ ]) ++ [
+              "-Db_sanitize=address,undefined"
+              "-Db_lundef=false"
+            ];
+            dontStrip = true;
+          };
+          cage-asan =
+            (cage.override {
+              cage = pkgs.cage.override { wlroots_0_20 = pkgs.wlroots_0_20.overrideAttrs sanitize; };
+            }).overrideAttrs
+              (old: sanitize old // { pname = "cage-asan"; });
         in
         {
-          inherit panoptes cage;
+          inherit panoptes cage cage-asan;
           default = panoptes;
           # nix build .#image && docker load < result
           image = pkgs.callPackage ./nix/image.nix { inherit panoptes cage; };
@@ -147,17 +163,24 @@
         cage-windows = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/cage-windows.nix {
           inherit (self.packages.${system}) cage;
         };
-        # The same scenario with the fork built under ASan and UBSan.
+        # Each -asan check runs the scenario before it under cage-asan.
         cage-windows-asan = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/cage-windows.nix {
           name = "cage-windows-asan";
-          cage = self.packages.${system}.cage.overrideAttrs (old: {
-            pname = "cage-asan";
-            mesonFlags = (old.mesonFlags or [ ]) ++ [
-              "-Db_sanitize=address,undefined"
-              "-Db_lundef=false"
-            ];
-            dontStrip = true;
-          });
+          cage = self.packages.${system}.cage-asan;
+        };
+        cage-menu = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/cage-menu.nix {
+          inherit (self.packages.${system}) cage;
+        };
+        cage-menu-asan = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/cage-menu.nix {
+          name = "cage-menu-asan";
+          cage = self.packages.${system}.cage-asan;
+        };
+        cage-remap = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/cage-remap.nix {
+          inherit (self.packages.${system}) cage;
+        };
+        cage-remap-asan = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/cage-remap.nix {
+          name = "cage-remap-asan";
+          cage = self.packages.${system}.cage-asan;
         };
         window-protocol = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/window-protocol.nix {
           inherit cage-src;

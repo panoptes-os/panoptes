@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<protocol name="panoptes_window_v1">
+<protocol name="panoptes_window">
   <description summary="windows as the compositor places them">
     Lists every managed toplevel window with what an agent needs to act on
     it: the process that owns it, its app_id and title, where it sits, the
@@ -10,7 +10,7 @@
     override-redirect windows.
   </description>
 
-  <interface name="panoptes_window_manager_v1" version="1">
+  <interface name="panoptes_window_manager" version="1">
     <description summary="announces windows">
       On bind the compositor sends xwayland if it runs Xwayland, then a
       window event for every current window, then each window's initial
@@ -35,11 +35,11 @@
       <description summary="a window to list">
         Its initial state follows on the new object, ended by done.
       </description>
-      <arg name="window" type="new_id" interface="panoptes_window_v1"/>
+      <arg name="window" type="new_id" interface="panoptes_window"/>
     </event>
   </interface>
 
-  <interface name="panoptes_window_v1" version="1">
+  <interface name="panoptes_window" version="1">
     <description summary="one toplevel window">
       Property events describe the window, and done marks a consistent
       state. After the initial state the compositor sends only the
@@ -104,7 +104,7 @@
       <description summary="the window this one is a dialog of">
         Null for a main window, and for a parent that is not listed.
       </description>
-      <arg name="parent" type="object" interface="panoptes_window_v1" allow-null="true"/>
+      <arg name="parent" type="object" interface="panoptes_window" allow-null="true"/>
     </event>
 
     <event name="focused">
