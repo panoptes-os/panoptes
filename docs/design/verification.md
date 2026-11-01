@@ -175,6 +175,20 @@ loom's.
    `tokio::sync::oneshot`, which the edge task awaits. Neither `send`
    blocks.
 
+## CI checks the rules that a tool can check
+
+| Rules | What fails the check | Check |
+|---|---|---|
+| Policy 2, 3 | A policy file that names I/O, the clock, a thread, a lock, an atomic, shared or interior-mutable state, `unsafe`, a closure or trait object argument, or `async`, or that imports more than std's collections and plain-data modules | `rules` nix check: `nix/rules/policy.sh` |
+| Policy 7, 8; threads 12, 13 | A mutant that cargo-mutants plants on a policy or threads line that the pull request changes, and that no test (policy) or loom model (threads) catches | CI `check-mutants`: `nix/rules/mutants.sh` |
+| Threads 2, 3, 8; tokio 2 | std's threads, locks, channels, atomics or clock named outside panoptes-sync, or a multi-threaded tokio runtime | CI `check-rust`: clippy under `--cfg panoptes_loom`, with `nix/rules/clippy.toml` |
+| Threads 13 | A crate that uses panoptes-sync and runs no loom model | `loom` nix check: `nix/rules/loom-count.sh` |
+| I/O 4 | `unsafe` in a module that does not allow `unsafe_code`, or an unsafe block with no `// SAFETY:` comment | The workspace lints `unsafe_code` and `undocumented_unsafe_blocks` |
+| I/O 5 | A sanitizer report, or an exit code other than 0, in the Cage fork's scenario | `cage-windows-asan` nix check |
+| Every rule | The two copies of the rules, here and in `docs/agents/`, numbered differently | `rules` nix check: `nix/rules/rule-copies.sh` |
+
+Review checks the other rules.
+
 ## Commands and layout
 
 | Check | Command |
@@ -184,6 +198,9 @@ loom's.
 | VM checks | `nix build -L .#checks.x86_64-linux.NAME`; see the [README](../../README.md#build-and-check) |
 | TLA+ for the facade | `bash crates/panoptes-sync/tla/check.sh`; every spec: `nix build -L .#checks.x86_64-linux.tla` |
 | Aeneas | `charon cargo --preset=aeneas`, then `aeneas -backend lean -split-files FILE.llbc` |
+| Rule scripts | `nix build -L .#checks.x86_64-linux.rules` |
+| Deny-list | `CLIPPY_CONF_DIR=$PWD/nix/rules RUSTFLAGS="--cfg panoptes_loom" cargo clippy --workspace --lib --bins -- -D warnings` |
+| Mutants | `bash nix/rules/mutants.sh DIFF`, where DIFF is a unified diff of the change |
 
 - Put a crate's loom models in a module named `loom_models`, gated with
   `#[cfg(all(test, panoptes_loom))]`. Call `panoptes_sync::model`, so that
@@ -194,3 +211,15 @@ loom's.
 - Change the specs in `crates/panoptes-sync/tla` with the code between the
   `tla` markers in that crate's `src/lib.rs`, and put the new hash in
   `tla/source.sha256`.
+- List each crate's policy files and threads files in its `Cargo.toml`:
+
+  ```toml
+  [package.metadata.panoptes]
+  policy = ["src/lease.rs"]
+  threads = ["src/owner.rs"]
+  ```
+
+- Where code outside panoptes-sync must name std's clock or threads, waive
+  the deny-list on that function, with the reason:
+  `#[cfg_attr(panoptes_loom, expect(clippy::disallowed_methods, reason = "..."))]`.
+  A crate that is not split yet allows the deny-list at its root.

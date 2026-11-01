@@ -1,0 +1,44 @@
+# The verification rules' deny-list, in docs/design/verification.md.
+#
+# Only the loom pass reads this file, through CLIPPY_CONF_DIR:
+#
+#   CLIPPY_CONF_DIR=$PWD/nix/rules RUSTFLAGS="--cfg panoptes_loom" \
+#     cargo clippy --workspace --lib --bins -- -D warnings
+#
+# In a normal build panoptes-sync re-exports std, so clippy would flag the
+# facade's own types as std's. Under panoptes_loom they are loom's, and only
+# raw std use is flagged.
+
+disallowed-methods = [
+  { path = "std::thread::spawn", reason = "threads 2: start threads with sync::spawn(name, f)" },
+  { path = "std::thread::Builder::spawn", reason = "threads 2: start threads with sync::spawn(name, f)" },
+  { path = "std::thread::Builder::spawn_scoped", reason = "threads 2, 10: use sync::scope" },
+  { path = "loom::thread::spawn", reason = "threads 2: start threads with sync::spawn(name, f)" },
+  { path = "std::time::Instant::now", reason = "threads 8: read the time with sync::now()" },
+  { path = "std::time::SystemTime::now", reason = "threads 8: read the time with sync::now()" },
+  { path = "std::sync::mpsc::channel", reason = "threads 3: use sync::mpsc" },
+  { path = "std::sync::mpsc::sync_channel", reason = "threads 3: use sync::mpsc" },
+  { path = "tokio::runtime::Builder::new_multi_thread", reason = "tokio 2: one named thread with a current-thread runtime" },
+  { path = "tokio::runtime::Runtime::new", reason = "tokio 2: one named thread with a current-thread runtime" },
+]
+
+disallowed-types = [
+  { path = "std::sync::Mutex", reason = "threads 3: use sync::Mutex" },
+  { path = "std::sync::RwLock", reason = "threads 3: use sync::Mutex" },
+  { path = "std::sync::Condvar", reason = "threads 3: use sync::Condvar" },
+  { path = "std::sync::Barrier", reason = "threads 3: use sync" },
+  { path = "std::sync::mpsc::Sender", reason = "threads 3: use sync::mpsc" },
+  { path = "std::sync::mpsc::SyncSender", reason = "threads 3: use sync::mpsc" },
+  { path = "std::sync::mpsc::Receiver", reason = "threads 3: use sync::mpsc" },
+  { path = "std::sync::atomic::AtomicBool", reason = "threads 3, 4: use sync::atomic, for counters only" },
+  { path = "std::sync::atomic::AtomicU32", reason = "threads 3, 4: use sync::atomic, for counters only" },
+  { path = "std::sync::atomic::AtomicU64", reason = "threads 3, 4: use sync::atomic, for counters only" },
+  { path = "std::sync::atomic::AtomicUsize", reason = "threads 3, 4: use sync::atomic, for counters only" },
+  { path = "std::sync::atomic::AtomicI32", reason = "threads 3, 4: use sync::atomic, for counters only" },
+  { path = "std::sync::atomic::AtomicI64", reason = "threads 3, 4: use sync::atomic, for counters only" },
+  { path = "std::sync::atomic::AtomicPtr", reason = "threads 3, 4: use sync::atomic, for counters only" },
+]
+
+disallowed-macros = [
+  { path = "tokio::main", reason = "tokio 2: one named thread with a current-thread runtime" },
+]

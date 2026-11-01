@@ -33,6 +33,9 @@ axum = "0.8"
 # panoptes_loom swaps panoptes-sync to loom; see docs/design/verification.md.
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(panoptes_loom)"] }
 unsafe_op_in_unsafe_fn = "deny"
+# I/O 4: unsafe code only in a module named for what it wraps, which
+# allows it.
+unsafe_code = "deny"
 missing_debug_implementations = "warn"
 
 [workspace.lints.clippy]

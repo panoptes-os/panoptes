@@ -11,10 +11,11 @@
 //! [`Cage`] to shut everything down.
 
 use panoptes_cgroup::{Cgroup, Child};
+use panoptes_sync as sync;
 use std::fs::File;
 use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -96,12 +97,12 @@ pub fn start(cgroup: Cgroup, cfg: &Config) -> Result<(Kiosk, Cage), String> {
         )
         .map_err(|e| format!("spawn cage: {e}"))?;
 
-    let deadline = Instant::now() + START_TIMEOUT;
+    let deadline = sync::now() + START_TIMEOUT.as_millis() as sync::Ms;
     let socket = loop {
         if let Some(s) = wayland_socket(&xdg) {
             break s;
         }
-        if Instant::now() > deadline {
+        if sync::now() > deadline {
             return Err(format!(
                 "cage opened no Wayland socket in {} within {START_TIMEOUT:?}",
                 xdg.display()

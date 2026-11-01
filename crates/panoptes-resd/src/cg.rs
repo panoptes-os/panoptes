@@ -148,6 +148,13 @@ impl Kiosk {
 }
 
 impl worker::Kiosk for Kiosk {
+    #[cfg_attr(
+        panoptes_loom,
+        expect(
+            clippy::disallowed_methods,
+            reason = "times the effect for the log, in fractions of a ms"
+        )
+    )]
     fn apply(&mut self, effect: Effect) -> Result<f64, String> {
         let cg = self.cg()?;
         let start = Instant::now();
@@ -172,6 +179,13 @@ impl worker::Kiosk for Kiosk {
         self.cg().ok()?.freeze_target().ok()
     }
 
+    #[cfg_attr(
+        panoptes_loom,
+        expect(
+            clippy::disallowed_methods,
+            reason = "times the park for the log, in fractions of a ms"
+        )
+    )]
     fn park_begin(&mut self) -> Result<bool, String> {
         let cg = self.cg()?;
         // Thawed after the policy chose it: leave it alone.

@@ -224,6 +224,7 @@ fn weights_round_trip() {
 /// start with neither, as `std::process::Command` gives it.
 #[test]
 #[ignore = "needs root in a delegated cgroup; see tests/run-root.sh"]
+#[allow(unsafe_code, reason = "blocks a signal with pthread_sigmask")]
 fn a_child_starts_with_default_signals() {
     use std::io::Read;
     use std::os::fd::AsFd;
