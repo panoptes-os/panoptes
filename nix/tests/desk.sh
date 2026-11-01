@@ -1,5 +1,6 @@
 # desk-check RUN_DIR: drive a running panoptes-desk over MCP on
-# RUN_DIR/desk.sock and check what wev (Wayland) and xev (X11) receive.
+# RUN_DIR/desk.sock and check what wev (Wayland) and xev (X11) receive. Then
+# stop it, and stop and restart a desk in a group that outlives it.
 run=$1
 sock=$run/desk.sock
 
@@ -16,7 +17,6 @@ fail() {
 }
 
 cd "$(mktemp -d)" || exit 1
-coproc MCP { socat - "UNIX-CONNECT:$sock"; }
 id=0
 
 # rpc METHOD PARAMS_JSON: one JSON-RPC request; the reply goes to reply.json.
@@ -76,10 +76,50 @@ logfile() {
 
 full_screen() { file shot.png | grep -q 'PNG image data, 1024 x 768' || fail "screenshot: $(file shot.png)"; }
 
+# connect: a new MCP session on $sock.
+connect() {
+  coproc MCP { socat - "UNIX-CONNECT:$sock"; }
+  rpc initialize '{"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "desk-check", "version": "0"}}'
+  jq -e .result.protocolVersion reply.json > /dev/null || fail "initialize"
+  echo '{"jsonrpc": "2.0", "method": "notifications/initialized"}' >&"${MCP[1]}"
+}
+
+# disconnect: end the MCP session. Its socat would otherwise outlive the desk
+# by 0.5 s, and bash keeps one coproc at a time.
+disconnect() {
+  pid=$MCP_PID
+  kill "$pid"
+  wait "$pid" || true
+}
+
+# start_desk: a desk in $agent, with stdin an open pipe that stays idle.
+start_desk() {
+  panoptes-desk --cgroup "$agent" --run-dir "$run" --mcp-stdio <&3 > /dev/null &
+  desk=$!
+  for _ in $(seq 600); do
+    [ -S "$sock" ] && break
+    sleep 0.1
+  done
+  [ -S "$sock" ] || fail "no desk socket"
+  connect
+}
+
+# desk_gone CODE: the desk exits with CODE, leaving no socket and no kiosk.
+desk_gone() {
+  for _ in $(seq 300); do
+    kill -0 "$desk" 2> /dev/null || break
+    sleep 0.1
+  done
+  ! kill -0 "$desk" 2> /dev/null || fail "the desk still runs after 30 s"
+  code=0
+  wait "$desk" || code=$?
+  [ "$code" = "$1" ] || fail "the desk exited with $code, not $1"
+  [ ! -e "$sock" ] || fail "the desk left its socket"
+  [ ! -e "$agent/kiosk" ] || fail "the desk left its kiosk group"
+}
+
 echo "== MCP session"
-rpc initialize '{"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "desk-check", "version": "0"}}'
-jq -e .result.protocolVersion reply.json > /dev/null || fail "initialize"
-echo '{"jsonrpc": "2.0", "method": "notifications/initialized"}' >&"${MCP[1]}"
+connect
 rpc tools/list '{}'
 for t in screenshot windows click move drag scroll key type launch focus close kill wait; do
   jq -e --arg t "$t" '[.result.tools[].name] | index($t)' reply.json > /dev/null || fail "no tool $t"
@@ -203,5 +243,43 @@ is '.met == false'
 refuse focus '{"window": 999}' 'no window 999'
 refuse click '{"x": 1024, "y": 0}' 'off the 1024x768 screen'
 refuse wait '{"app_id": "wev", "closed": "true"}' 'closed must be true or false'
+
+echo "== SIGTERM ends a desk whose stdin stays open, and removes its kiosk"
+# systemd removes a unit's group with the unit, so a restart there would
+# prove nothing. An agent's group outlives its desk.
+disconnect
+systemctl stop desk
+agent=/sys/fs/cgroup/agent
+run=/run/desk-agent
+sock=$run/desk.sock
+mkdir "$agent"
+echo +pids > /sys/fs/cgroup/cgroup.subtree_control
+mkfifo idle
+exec 3<> idle
+start_desk
+call launch '{"argv": ["stdbuf", "-oL", "wev"], "timeout_ms": 120000}'
+is '.windows.opened | length == 1'
+disconnect
+kill -TERM "$desk"
+desk_gone 0
+
+echo "== after a restart in the same group, the desk launches an app and works"
+start_desk
+call launch '{"argv": ["stdbuf", "-oL", "wev"], "timeout_ms": 120000}'
+is '.windows.opened | length == 1'
+call click '{"x": 300, "y": 200, "screenshot": false}'
+logged "$(logfile 'wl_keyboard')" 'button: 272 \(left\), state: 1 \(pressed\)'
+
+echo "== a launch with no thread to wait for it fails alone"
+echo $(($(cat "$agent/pids.current") + 1)) > "$agent/pids.max"
+refuse launch '{"argv": ["sleep", "600"]}' 'launch sleep'
+! pgrep -x sleep || fail "the refused program still runs"
+echo max > "$agent/pids.max"
+call windows
+is '.windows | length == 1'
+
+echo "== losing the compositor ends the desk"
+pkill -KILL -f '/bin/cage '
+desk_gone 1
 
 echo "desk-check: ok"

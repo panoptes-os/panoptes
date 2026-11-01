@@ -6,13 +6,14 @@
 //! ├─ desk/    panoptes-desk; never frozen, so it can thaw the kiosk
 //! └─ kiosk/   cage -r WxH, Xwayland, and the launched apps
 //! ```
+//!
+//! The desk thread owns the [`Kiosk`] and launches apps; `main` keeps the
+//! [`Cage`] to shut everything down.
 
 use panoptes_cgroup::{Cgroup, Child};
 use std::fs::File;
 use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
@@ -31,8 +32,14 @@ pub struct Kiosk {
     env: Vec<(String, String)>,
     /// Each launched app's stdout and stderr, as `<n>-<program>.log`.
     logs: PathBuf,
-    launched: AtomicU32,
-    cage: Mutex<Option<Child>>,
+    launched: u32,
+}
+
+/// Cage itself, for shutting the kiosk down.
+#[derive(Debug)]
+pub struct Cage {
+    cgroup: Cgroup,
+    child: Child,
 }
 
 /// How long Cage may take to open its socket.
@@ -56,9 +63,12 @@ pub fn prepare_cgroups(agent: &Cgroup) -> panoptes_cgroup::Result<Cgroup> {
 
 /// Start Cage at the configured size in the kiosk group and wait for its
 /// socket.
-pub fn start(cgroup: Cgroup, cfg: &Config) -> Result<Kiosk, String> {
+pub fn start(cgroup: Cgroup, cfg: &Config) -> Result<(Kiosk, Cage), String> {
     let xdg = cfg.run_dir.join("xdg");
     let logs = cfg.run_dir.join("logs");
+    // A desk that ran here before leaves its Wayland socket, which refuses
+    // connections and would pass for this Cage's.
+    let _ = std::fs::remove_dir_all(&xdg);
     for d in [&xdg, &logs] {
         std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
     }
@@ -112,8 +122,8 @@ pub fn start(cgroup: Cgroup, cfg: &Config) -> Result<Kiosk, String> {
         socket.display(),
         cgroup.path().display()
     );
-    Ok(Kiosk {
-        cgroup,
+    let kiosk = Kiosk {
+        cgroup: cgroup.clone(),
         socket,
         env: vec![
             ("XDG_RUNTIME_DIR".into(), xdg_s),
@@ -121,9 +131,9 @@ pub fn start(cgroup: Cgroup, cfg: &Config) -> Result<Kiosk, String> {
             ("WAYLAND_DISPLAY".into(), display),
         ],
         logs,
-        launched: AtomicU32::new(0),
-        cage: Mutex::new(Some(child)),
-    })
+        launched: 0,
+    };
+    Ok((kiosk, Cage { cgroup, child }))
 }
 
 /// The `wayland-N` socket in a runtime directory, once one exists.
@@ -142,13 +152,14 @@ impl Kiosk {
     /// /dev/null, and stdout and stderr go to a fresh log, whose path is
     /// returned.
     pub fn launch(
-        &self,
+        &mut self,
         argv: &[String],
         env: &[(String, String)],
         display: Option<&str>,
     ) -> Result<(Child, PathBuf), String> {
         let program = argv.first().ok_or("launch needs a program")?;
-        let n = self.launched.fetch_add(1, Ordering::Relaxed) + 1;
+        self.launched += 1;
+        let n = self.launched;
         let name = Path::new(program)
             .file_name()
             .map_or_else(|| "app".into(), |s| s.to_string_lossy());
@@ -189,15 +200,20 @@ impl Kiosk {
         rustix::process::kill_process(pid, rustix::process::Signal::KILL)
             .map_err(|e| format!("kill {pid:?}: {e}"))
     }
+}
 
-    /// Kill everything in the kiosk group, Cage last to be reaped.
-    pub fn shutdown(&self) {
+impl Cage {
+    /// Kill everything in the kiosk group, Cage last to be reaped, and
+    /// remove the group. A restart must not reuse it: Linux before 6.18.59
+    /// kills a clone3(CLONE_INTO_CGROUP) child of a group that has ever had
+    /// cgroup.kill.
+    pub fn shutdown(self) {
         let _ = self.cgroup.thaw(Duration::from_secs(1));
         let _ = self.cgroup.kill_all();
         let _ = self.cgroup.wait_empty(Duration::from_secs(5));
-        let cage = self.cage.lock().ok().and_then(|mut c| c.take());
-        if let Some(child) = cage {
-            let _ = child.wait();
+        let _ = self.child.wait();
+        if let Err(e) = self.cgroup.remove() {
+            eprintln!("panoptes-desk: {e}");
         }
     }
 }
