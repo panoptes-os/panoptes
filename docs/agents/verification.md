@@ -212,7 +212,7 @@ tokio runs only where a network library needs it.
 | Threads 2, 3, 8; tokio 2 | std's threads, locks, channels, atomics or clock named outside panoptes-sync, or a multi-threaded tokio runtime | CI `check-rust`: clippy under `--cfg panoptes_loom`, with `nix/rules/clippy.toml` |
 | Threads 13 | A crate that uses panoptes-sync and runs no loom model | `loom` nix check: `nix/rules/loom-count.sh` |
 | I/O 4 | `unsafe` in a module that does not allow `unsafe_code`, or an unsafe block with no `// SAFETY:` comment | The workspace lints `unsafe_code` and `undocumented_unsafe_blocks` |
-| I/O 5 | A sanitizer report, or an exit code other than 0, in the Cage fork's scenario | `cage-windows-asan` nix check |
+| I/O 5 | A sanitizer report, or an exit code other than 0, in one of the Cage fork's scenarios | The `cage-*-asan` nix checks |
 | Every rule | The two copies of the rules, here and in `docs/agents/`, numbered differently | `rules` nix check: `nix/rules/rule-copies.sh` |
 
 Review checks the other rules.

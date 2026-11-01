@@ -97,8 +97,10 @@ to end. Run one with `nix build -L .#checks.x86_64-linux.NAME`:
 | `unit` | Every crate's tests, except the cgroup tests that need root |
 | `loom` | The loom models, with panoptes-sync swapped to loom; see [verification.md](docs/design/verification.md) |
 | `cage-size` | The fork with no client: the screen is 1024x768, and a malformed size is refused |
-| `cage-windows` | foot, xeyes and a Tk dialog, listed, focused and closed through the fork's window protocol; then Cage exits cleanly |
-| `cage-windows-asan` | The same, with the fork built under ASan and UBSan: no memory error, leak or undefined behavior |
+| `cage-windows` | foot, xeyes and a Tk dialog, listed, focused and closed through the fork's window protocol; foot fills the screen; then Cage exits cleanly |
+| `cage-menu` | A Tk menu and an override-redirect window, drawn where X puts them and followed when they move |
+| `cage-remap` | An xdg toplevel that unmaps with a NULL buffer and maps again |
+| `cage-windows-asan`, `cage-menu-asan`, `cage-remap-asan` | The same scenarios under `cage-asan`, the fork and its wlroots built with ASan and UBSan: no memory error, leak or undefined behavior |
 | `window-protocol` | The desk's copy of the window protocol matches the fork's |
 | `desk` | panoptes-desk under systemd in a NixOS VM, driving wev, xev and Tk over MCP |
 | `resd` | panoptes-resd in a NixOS VM with zswap on: a kiosk cgroup frozen, parked, woken, kept frozen across a restart, evicted and forgotten |

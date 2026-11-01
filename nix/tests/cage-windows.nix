@@ -1,6 +1,7 @@
 # Cage's panoptes_window_v1 end to end, for a Wayland window (foot) and an
-# X11 one (xeyes): each is listed with its pid, app_id, title and box;
-# focus follows mapping and activate; a title change and a close reach a
+# X11 one (xeyes): each is listed with its pid, app_id, title and box, and
+# foot's window geometry fills the screen; focus follows mapping and
+# activate; a title change and a close reach a
 # client that was watching before the windows mapped, and a client that
 # binds afterwards sees the same state. A Tk dialog gets the size it asks
 # for, centered, before and after it maps; its main window keeps the
@@ -13,6 +14,7 @@
   dejavu_fonts,
   cage,
   foot,
+  grim,
   xeyes,
   tk,
 }:
@@ -25,6 +27,7 @@ runCommand name
     nativeBuildInputs = [
       cage
       foot
+      grim
       xeyes
       tk
     ];
@@ -76,12 +79,21 @@ runCommand name
 
     foot sh -c 'printf "\033]2;agent\007"; exec sleep 600' 2> foot.log &
     foot=$!
-    # foot draws its title bar as a subsurface above its main surface, and
-    # Cage puts the main surface, not the window geometry, at the origin:
-    # the box starts above the screen.
-    win="pid=$foot app_id=\"foot\" title=\"agent\" box=0,-[0-9]+,1024x768 focused=1 parent=0"
+    # foot draws its title bar as a subsurface above its main surface. Its
+    # window geometry, title bar included, fills the screen.
+    win="pid=$foot app_id=\"foot\" title=\"agent\" box=0,0,1024x768 focused=1 parent=0"
     within 100 watched "$win" || fail "the watcher never saw foot's window retitled"
     listed "$win" || fail "a fresh listing disagrees on foot's window"
+    # So foot reaches the bottom row. Cage used to put foot's main surface
+    # at the origin, which pushed the title bar off the top and left the
+    # bottom rows black (upstream Cage issue 254).
+    bottom_lit() {
+      grim -t ppm shot.ppm || return 1
+      header=$(head -n 3 shot.ppm | wc -c)
+      px=$(od -An -tu1 -j $((header + (767 * 1024 + 512) * 3)) -N3 shot.ppm | tr -s ' ')
+      [ "$px" != " 0 0 0" ]
+    }
+    within 50 bottom_lit || fail "the bottom row under foot is black"
 
     DISPLAY=$display xeyes 2> xeyes.log &
     xeyes=$!
