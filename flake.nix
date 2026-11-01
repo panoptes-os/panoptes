@@ -120,6 +120,9 @@
         cgroup = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/cgroup.nix {
           inherit (self.packages.${system}) panoptes;
         };
+        desk-resd = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/desk-resd.nix {
+          inherit (self.packages.${system}) panoptes cage;
+        };
       });
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt);
