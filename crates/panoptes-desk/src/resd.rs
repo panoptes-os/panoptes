@@ -8,14 +8,15 @@
 //! > {"op":"release"}      < {"ok":true,...}
 //! ```
 //!
-//! A refusal fails the call that asked. When resd cannot be reached or
-//! does not answer in time, the desk thaws the kiosk itself, so the agent
-//! keeps working without residency.
+//! A refusal fails the call that asked, and the next call connects again:
+//! resd closes a connection it refuses for being full. When resd cannot be
+//! reached or does not answer in time, the desk thaws the kiosk itself, so
+//! the agent keeps working without residency.
 
 use crate::owner::{Acquired, Residency};
 use panoptes_cgroup::Cgroup;
 use serde_json::Value;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -54,8 +55,9 @@ impl Resd {
 
     fn send(&mut self, op: &str) -> Result<Value, Failed> {
         let r = self.round_trip(op);
-        if matches!(r, Err(Failed::Unreachable(_))) {
-            // The stream may hold half a reply; start over next time.
+        if r.is_err() {
+            // The stream may hold half a reply, or resd may have closed it
+            // after refusing; start over next time.
             self.conn = None;
         }
         r
@@ -73,9 +75,16 @@ impl Resd {
             self.conn = Some(BufReader::new(s));
         }
         let conn = self.conn.as_mut().expect("connected above");
-        conn.get_mut()
-            .write_all(format!("{{\"op\":\"{op}\"}}\n").as_bytes())
-            .map_err(unreachable)?;
+        let sent = conn
+            .get_mut()
+            .write_all(format!("{{\"op\":\"{op}\"}}\n").as_bytes());
+        // A full resd writes its refusal and closes without reading, which
+        // can come before this write. The refusal is still here to read.
+        if let Err(e) = sent
+            && e.kind() != ErrorKind::BrokenPipe
+        {
+            return Err(unreachable(e));
+        }
         let mut line = String::new();
         match conn.read_line(&mut line) {
             Ok(0) => return Err(Failed::Unreachable("resd closed the connection".into())),
@@ -192,6 +201,55 @@ mod tests {
         let _ops = fake(&socket, |_| Some(r#"{"ok":false,"error":"unknown agent"}"#));
         let e = Resd::new(socket, kiosk).acquire().unwrap_err();
         assert!(e.contains("refused") && e.contains("unknown agent"), "{e}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// `dir` as a frozen kiosk. A thaw would rewrite its `cgroup.freeze`.
+    fn freeze(dir: &Path) {
+        std::fs::write(dir.join("cgroup.events"), "populated 1\nfrozen 1\n").unwrap();
+        std::fs::write(dir.join("cgroup.freeze"), "1\n").unwrap();
+    }
+
+    fn assert_frozen(dir: &Path) {
+        let asks = std::fs::read_to_string(dir.join("cgroup.freeze")).unwrap();
+        assert_eq!(asks, "1\n", "the desk thawed the kiosk itself");
+    }
+
+    const FULL: &[u8] = b"{\"ok\":false,\"error\":\"too many connections\"}\n";
+
+    #[test]
+    fn a_full_resd_fails_each_call_and_the_kiosk_stays_frozen() {
+        let (dir, kiosk) = dir("full");
+        freeze(&dir);
+        let socket = dir.join("resd.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                stream.unwrap().write_all(FULL).unwrap();
+            }
+        });
+        let mut resd = Resd::new(socket, kiosk);
+        for call in 0..3 {
+            let e = resd.acquire().expect_err("no refusal: thawed it instead");
+            assert!(e.contains("too many connections"), "call {call}: {e}");
+        }
+        assert_frozen(&dir);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_refusal_that_beat_the_write_is_still_a_refusal() {
+        let (dir, kiosk) = dir("beat");
+        freeze(&dir);
+        let (mut resd_end, desk_end) = UnixStream::pair().unwrap();
+        resd_end.write_all(FULL).unwrap();
+        drop(resd_end);
+        let mut resd = Resd::new(dir.join("no.sock"), kiosk);
+        resd.conn = Some(BufReader::new(desk_end));
+        let e = resd.acquire().expect_err("no refusal: thawed it instead");
+        assert!(e.contains("too many connections"), "{e}");
+        assert!(resd.conn.is_none(), "kept a closed connection");
+        assert_frozen(&dir);
         let _ = std::fs::remove_dir_all(dir);
     }
 
