@@ -147,7 +147,9 @@ On 2026-11-01, with Aeneas ab34bd28 and Charon 0.1.304:
    others copy.
 6. Give every wait for a reply a limit. `sync::recv_reply(&rx, limit, what)`
    returns an error that names `what` when the limit passes. Under loom it
-   waits without a limit, because loom reports a deadlock itself.
+   returns that error at once if no reply is queued, so loom tries the
+   timeout at every point. Handle the error: a late reply can still come
+   after it.
 7. An owner waits for its next message without a limit, unless its policy
    has a deadline. Then it calls `sync::recv_timer(&rx, deadline)`. Under
    loom, `recv_timer` returns at once if no message is queued, so the timer
@@ -208,12 +210,18 @@ tokio runs only where a network library needs it.
 | Policy tests | `cargo test -p CRATE`; every crate: `nix build -L .#checks.x86_64-linux.unit` |
 | loom models | `RUSTFLAGS="--cfg panoptes_loom" cargo test --release -p CRATE -- loom_models`; every crate: `nix build -L .#checks.x86_64-linux.loom` |
 | VM checks | `nix build -L .#checks.x86_64-linux.NAME`; see the [README](../../README.md#build-and-check) |
+| TLA+ for the facade | `bash crates/panoptes-sync/tla/check.sh`; every spec: `nix build -L .#checks.x86_64-linux.tla` |
 | Aeneas | `charon cargo --preset=aeneas`, then `aeneas -backend lean -split-files FILE.llbc` |
 
 Put a crate's loom models in a module named `loom_models`, gated with
 `#[cfg(all(test, panoptes_loom))]`, and call `panoptes_sync::model` so
 that loom stays one crate's dependency. Gate every other test that uses
 `panoptes_sync` with `#[cfg(not(panoptes_loom))]`.
+
+TLA+ specs in `crates/panoptes-sync/tla` model the facade's code between
+the `tla` markers in its `src/lib.rs`, and the check compares a hash of
+that text. Change the specs with the code, run the check, and put the new
+hash in `tla/source.sha256`.
 
 loom's own docs use `--cfg loom`. Panoptes cannot: tokio drops its `net`
 module under that cfg (tokio 1.54.1, `src/net/mod.rs:1`). On 2026-10-31,
@@ -226,5 +234,5 @@ with `--cfg loom`, hyper-util and tokio-tungstenite failed to compile.
 | Kani | Not in nixpkgs at the flake's pin. Exhaustive tests cover the small worlds a policy needs without another toolchain |
 | ThreadSanitizer | Safe Rust cannot data-race, and loom checks atomics more thoroughly |
 | ASan and Miri on Rust | Both need a nightly toolchain; the flake pins a stable one. Miri cannot run raw system calls such as clone3 either |
-| Veil, TLA+ | They check a model written by hand in a second language, which can drift from the code |
+| Veil; TLA+ beyond the facade | They check a model written by hand in a second language, which can drift from the code. The facade is the exception; see verification-rationale.md |
 | shuttle | Random schedules for protocols too large for loom. Split the protocol first |

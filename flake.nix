@@ -57,6 +57,39 @@
 
       checks = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system: {
         inherit (self.packages.${system}) panoptes cage;
+        # cargo test, except the root-only tests, which are #[ignore].
+        unit = self.packages.${system}.panoptes.overrideAttrs {
+          pname = "panoptes-unit";
+          doCheck = true;
+        };
+        # The loom models, with panoptes-sync swapped to loom: every
+        # library's and binary's `loom_models`. See
+        # docs/design/verification.md.
+        loom = self.packages.${system}.panoptes.overrideAttrs (old: {
+          pname = "panoptes-loom";
+          doCheck = true;
+          cargoTestFlags = [
+            "--lib"
+            "--bins"
+          ];
+          checkFlags = [ "loom_models" ];
+          env = (old.env or { }) // {
+            RUSTFLAGS = "--cfg panoptes_loom";
+          };
+        });
+        # TLC on panoptes-sync's TLA+ specs: its channel under loom is std's
+        # mpsc, and loom tries every wait a real build can make. See
+        # crates/panoptes-sync/tla.
+        tla =
+          let
+            pkgs = nixpkgs.legacyPackages.${system};
+          in
+          pkgs.runCommand "panoptes-tla" { nativeBuildInputs = [ pkgs.tlaplus ]; } ''
+            export HOME=$TMPDIR
+            cp -r ${./crates/panoptes-sync} sync
+            bash sync/tla/check.sh
+            touch $out
+          '';
         cage-size = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/cage-size.nix {
           inherit (self.packages.${system}) cage;
         };

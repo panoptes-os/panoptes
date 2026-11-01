@@ -1,0 +1,14 @@
+[package]
+name = "panoptes-sync"
+description = "Threads, channels and locks for Panoptes: std's, or loom's under --cfg panoptes_loom"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[target.'cfg(panoptes_loom)'.dependencies]
+loom = "0.7"
+
+[lints]
+workspace = true

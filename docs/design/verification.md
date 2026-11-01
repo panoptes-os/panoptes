@@ -114,7 +114,7 @@ loom's.
 | `now()` | Milliseconds since the first call | Always 0 |
 | `recv(&rx)` | Waits for a message; `Wait::Closed` when every sender is gone | The same |
 | `recv_timer(&rx, deadline)` | Waits for a message until `deadline`; then `Wait::Timer` | `Wait::Timer` at once if no message is queued |
-| `recv_reply(&rx, limit, what)` | Waits for a reply up to `limit`; the error names `what` | Waits with no limit |
+| `recv_reply(&rx, limit, what)` | Waits for a reply up to `limit`; the error names `what` | The timeout error at once if no reply is queued |
 
 ## Threads: one owner per state, checked with loom
 
@@ -128,7 +128,8 @@ loom's.
 5. Hold a lock only to copy or update its data. Do not hold it across I/O,
    a wait or another lock. Use a lock for data that one thread writes and
    other threads copy.
-6. Wait for a reply with `sync::recv_reply(&rx, limit, what)`.
+6. Wait for a reply with `sync::recv_reply(&rx, limit, what)`, and handle
+   its error. A late reply can still come after it.
 7. An owner waits for its next message with `sync::recv(&rx)`. If its
    policy has a deadline, it waits with `sync::recv_timer(&rx, deadline)`.
 8. Read the time only with `sync::now()`.
@@ -181,6 +182,7 @@ loom's.
 | Policy tests | `cargo test -p CRATE`; every crate: `nix build -L .#checks.x86_64-linux.unit` |
 | loom models | `RUSTFLAGS="--cfg panoptes_loom" cargo test --release -p CRATE -- loom_models`; every crate: `nix build -L .#checks.x86_64-linux.loom` |
 | VM checks | `nix build -L .#checks.x86_64-linux.NAME`; see the [README](../../README.md#build-and-check) |
+| TLA+ for the facade | `bash crates/panoptes-sync/tla/check.sh`; every spec: `nix build -L .#checks.x86_64-linux.tla` |
 | Aeneas | `charon cargo --preset=aeneas`, then `aeneas -backend lean -split-files FILE.llbc` |
 
 - Put a crate's loom models in a module named `loom_models`, gated with
@@ -189,3 +191,6 @@ loom's.
 - Gate every other test that uses `panoptes_sync` with
   `#[cfg(not(panoptes_loom))]`.
 - Use `--cfg panoptes_loom`, not loom's usual `--cfg loom`.
+- Change the specs in `crates/panoptes-sync/tla` with the code between the
+  `tla` markers in that crate's `src/lib.rs`, and put the new hash in
+  `tla/source.sha256`.
