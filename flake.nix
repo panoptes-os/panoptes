@@ -57,6 +57,31 @@
 
       checks = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system: {
         inherit (self.packages.${system}) panoptes cage;
+        # cargo test, except the root-only tests, which are #[ignore]. In the
+        # debug profile, as a policy checks its invariants on each step only
+        # under debug assertions.
+        unit = self.packages.${system}.panoptes.overrideAttrs {
+          pname = "panoptes-unit";
+          doCheck = true;
+          cargoCheckType = "debug";
+        };
+        # The loom models, with panoptes-sync swapped to loom: every
+        # library's and binary's `loom_models`. See
+        # docs/design/verification.md.
+        loom = self.packages.${system}.panoptes.overrideAttrs (old: {
+          pname = "panoptes-loom";
+          doCheck = true;
+          cargoTestFlags = [
+            "--lib"
+            "--bins"
+          ];
+          checkFlags = [ "loom_models" ];
+          env = (old.env or { }) // {
+            RUSTFLAGS = "--cfg panoptes_loom";
+            # So that a model also trips a policy's invariants.
+            CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS = "true";
+          };
+        });
         cage-size = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/cage-size.nix {
           inherit (self.packages.${system}) cage;
         };

@@ -13,6 +13,7 @@ repository = "https://github.com/panoptes-os/panoptes"
 
 [workspace.dependencies]
 panoptes-cgroup = { path = "crates/panoptes-cgroup" }
+panoptes-sync = { path = "crates/panoptes-sync" }
 libc = "0.2"
 rustix = { version = "1", features = ["fs", "event", "process"] }
 tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "sync", "time", "signal", "fs", "process"] }
@@ -28,6 +29,8 @@ reqwest = { version = "0.13", features = ["stream", "json"] }
 axum = "0.8"
 
 [workspace.lints.rust]
+# panoptes_loom swaps panoptes-sync to loom; see docs/design/verification.md.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(panoptes_loom)"] }
 unsafe_op_in_unsafe_fn = "deny"
 missing_debug_implementations = "warn"
 

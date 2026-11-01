@@ -147,7 +147,9 @@ On 2026-11-01, with Aeneas ab34bd28 and Charon 0.1.304:
    others copy.
 6. Give every wait for a reply a limit. `sync::recv_reply(&rx, limit, what)`
    returns an error that names `what` when the limit passes. Under loom it
-   waits without a limit, because loom reports a deadlock itself.
+   returns that error at once if no reply is queued, so loom tries the
+   timeout at every point. Handle the error: a late reply can still come
+   after it.
 7. An owner waits for its next message without a limit, unless its policy
    has a deadline. Then it calls `sync::recv_timer(&rx, deadline)`. Under
    loom, `recv_timer` returns at once if no message is queued, so the timer
