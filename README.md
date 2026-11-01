@@ -2,17 +2,23 @@
   <img src="docs/assets/wordmark.png" alt="Panoptes" width="560">
 </p>
 
-Run hundreds of graphical AI agents on one Linux box.
+A high-performance harness and orchestrator for graphical AI agents on
+Linux.
 
 Each agent gets its own Linux desktop: our fork of the Cage compositor at
 1024x768, running whatever programs the agent launches, Wayland or X11.
-While an agent waits for its model, Panoptes freezes its desktop with
-cgroup v2. When the agent has been idle for a while, Panoptes compresses
-the desktop's memory into zswap with writeback off. Measured with
-Chromium, a parked desktop held about 40 MiB and took about 100 ms to
-wake and take a screenshot. Native programs park too: KiCad went from
-1387 to 333 MiB, Blender from 871 to 164, and LTspice under Wine from 215
-to 93.
+We design Panoptes for fast models. We treat a model call as free and
+instant, and optimize what each step costs the host: acting, waiting for
+the screen to settle, and capturing it. [docs/vision.md](docs/vision.md)
+explains the bet.
+
+When an agent stops acting, Panoptes freezes its desktop with cgroup v2.
+After 30 s idle, it compresses the desktop's memory into zswap with
+writeback off. That pays while an agent waits on something slower than
+itself: a person, a slow backend, or a quota. Measured with Chromium, a
+parked desktop held about 40 MiB and took about 100 ms to wake and take a
+screenshot. Native programs park too: KiCad went from 1387 to 333 MiB,
+Blender from 871 to 164, and LTspice under Wine from 215 to 93.
 
 ![panoptes top during the 700-agent run](docs/assets/top.gif)
 
@@ -33,11 +39,12 @@ Status: prototype. The checks below drive Wayland and X11 apps through
 the desk. The scale results come from the earlier desk, which ran Chromium
 in each Cage and drove it over the Chrome DevTools Protocol: on one host
 with 32 threads and 125 GiB of RAM, 700 agents entered 700 of 700 test
-invoices correctly, with 670 parked at the peak. That run used a scripted
-model that answers from the test data, to measure Panoptes itself; real
-models have run 10 invoices. [docs/one-pager.md](docs/one-pager.md) has
-the numbers, and [docs/design/](docs/design/README.md) explains how each
-was measured.
+invoices correctly, with 670 parked at the peak. The demo's cap of 25
+agents in ERPNext at once set the rate: 300 agents entered invoices as
+fast as 700. That run used a scripted model that answers from the test
+data after 2 s, to measure Panoptes itself; real models have run 10
+invoices. [docs/one-pager.md](docs/one-pager.md) has the numbers, and
+[docs/design/](docs/design/README.md) explains how each was measured.
 
 ## Layout
 

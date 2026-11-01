@@ -1,7 +1,7 @@
 # Panoptes one-pager
 
-As of 2026-10-31. Panoptes runs hundreds of graphical AI agents on one
-Linux host.
+As of 2026-10-31. Panoptes is a high-performance harness and orchestrator
+for graphical AI agents on Linux, designed for fast models.
 
 ## What it does
 
@@ -10,12 +10,19 @@ Each agent gets its own Linux desktop: our fork of the Cage compositor at
 agent works them the way a person would, by reading the screen and
 clicking and typing.
 
-Most of an agent's time goes to waiting for the model. While it waits,
-Panoptes freezes the agent's desktop with cgroup v2, so its programs use
-no CPU. After it has waited a while, Panoptes compresses the desktop's
-memory into zswap. Measured with Chromium, a running desktop held about
-180 MiB and a parked one about 40 MiB, and a parked one took about 100 ms
-to wake and take a screenshot.
+We design for models that keep getting faster and cheaper. We treat a
+model call as free and instant, and optimize what each step costs the
+host: acting, waiting for the screen to settle, and capturing it. With a
+scripted model on the earlier desk, that work took a median of 660 ms per
+step, about half of it waiting for the screen to settle.
+[vision.md](vision.md) has the numbers and the bet behind them.
+
+When an agent stops acting, Panoptes freezes its desktop with cgroup v2,
+so its programs use no CPU. After 30 s idle, it compresses the desktop's
+memory into zswap. That pays while an agent waits on something slower
+than itself: a person, a slow backend, or a quota. Measured with Chromium,
+a running desktop held about 180 MiB and a parked one about 40 MiB, and a
+parked one took about 100 ms to wake and take a screenshot.
 
 Agents are driven through `panoptes-desk`, which serves screenshot,
 windows, click, move, drag, scroll, key, type, launch, focus, close, kill,
@@ -40,6 +47,8 @@ DevTools Protocol.
 | Native apps parked | KiCad 1387 to 333 MiB, Blender 871 to 164, LTspice under Wine 215 to 93 |
 | 300 agents, scripted model | 300 of 300 invoices correct |
 | 700 agents, scripted model | 700 of 700 in 19 min; 670 parked at peak, 40.6 MiB each |
+| 300 against 700 agents, scripted model | The same rate, about 0.6 invoices/s; the demo's cap of 25 agents in ERPNext at once set it |
+| Harness time per step, scripted model, 20 agents | 660 ms median, 1,316 at the 90th percentile; settling 324 ms median |
 | Real models on Baseten, 10 invoices | DeepSeek V4 Flash 10 of 10 at about $0.075 each; gpt-oss-120b 7 of 10; Kimi K3 3 of 3 at $0.71 to $1.02 |
 | DeepSeek V4 Flash, trimmed prompt | 9 of 10 at about $0.015 each |
 | Container overhead | 0.4 to 2.9 MiB per instance; Docker 5.9 |

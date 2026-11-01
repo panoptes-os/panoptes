@@ -13,6 +13,21 @@ kernel and inference work pays off.
 | [decisions.md](decisions.md) | What was decided on 2026-10-27 and 2026-10-30 | Panoptes: an AGPL engine in a Docker image built with Nix, its own agent loop, and MCP for other harnesses. Since 2026-10-30, a harness for any Linux GUI program on a Cage fork at 1024x768 |
 | [measurements.md](measurements.md) | How each number was taken | Machine, versions, methods, caveats |
 
+## Since 2026-10-31, the harness is the cost
+
+These notes were measured while a model step took seconds, and four
+findings below lean on that. Since 2026-10-31, [vision.md](../vision.md)
+sets the rule: treat a model call as free and instant, and count harness
+time per step as the cost. The harness's median step on the earlier desk
+was 660 ms.
+
+| Finding | Under that rule |
+|---|---|
+| 4. Parking | Still pays, for waits that are not the model: a person, a slow backend, a quota. Waking costs 40 to 75 ms, 6 to 11 percent of a 660 ms step |
+| 9. The network | It compared against a model step of seconds. A new 22 to 51 ms TLS connection is 3 to 8 percent of a 660 ms step, so reusing connections matters more |
+| 10. The GPU | It describes one local model on one GPU: how fast that model runs, not what limits Panoptes |
+| 12. Freezing between steps | It assumed seconds between steps. With a fast model little gap is left to save CPU in, and a frozen kiosk's next capture took 9 to 16 ms longer |
+
 ## Findings
 
 1. The browser is what an agent costs. Cage holds 10 MiB per agent;
