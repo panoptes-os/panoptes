@@ -136,7 +136,9 @@ fn freeze_stops_cpu_and_thaw_resumes_it() {
     let child = cg
         .spawn(&["sh", "-c", "exec yes > /dev/null"], &[])
         .unwrap();
-    assert!(eventually(SEC, || cg.cpu_usage_us().unwrap() > 10_000));
+    // A busy VM with one CPU may give `yes` little time, so each check
+    // waits up to 10 s and returns once the CPU shows up.
+    assert!(eventually(10 * SEC, || cg.cpu_usage_us().unwrap() > 10_000));
 
     let froze = cg.freeze(5 * SEC).unwrap();
     assert!(cg.events().unwrap().frozen);
@@ -156,8 +158,8 @@ fn freeze_stops_cpu_and_thaw_resumes_it() {
     );
     assert!(frozen_cpu < 1_000, "frozen group used {frozen_cpu} µs");
     assert!(
-        thawed_cpu > 100_000,
-        "thawed group used only {thawed_cpu} µs"
+        eventually(10 * SEC, || cg.cpu_usage_us().unwrap() - before > 100_000),
+        "thawed group never used 100 ms of CPU"
     );
     drop(child);
 }
@@ -196,7 +198,9 @@ fn reclaim_parks_a_frozen_group_in_zswap() {
         "charge only fell from {before} to {after}"
     );
     assert!(parked.get("zswapped").unwrap_or(0) > 100 * MIB);
-    assert_eq!(parked.get("zswpwb").unwrap_or(0), 0, "writeback was off");
+    // memory.stat has zswpwb since 6.8; a missing key must not pass.
+    let written_back = parked.get("zswpwb").expect("memory.stat has zswpwb");
+    assert_eq!(written_back, 0, "writeback was off");
     assert_eq!(
         cg.procs().unwrap(),
         vec![hog.pid()],
