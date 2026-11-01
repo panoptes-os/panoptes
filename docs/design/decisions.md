@@ -1,6 +1,23 @@
-# Decisions, 2026-10-27
+# Decisions
 
-Status: accepted, 2026-10-27.
+## 2026-10-30: a harness for any Linux GUI app
+
+Status: accepted, 2026-10-30. Supersedes the 2026-10-27 Observation row,
+and the screen size and CDP driving in [desktop.md](desktop.md).
+
+| Decision | Choice | Why |
+|---|---|---|
+| Scope | Any Linux GUI program, Wayland or X11; not a browser harness | The earlier desk drove one Chromium over CDP, so an agent could use only web pages |
+| Compositor | Our fork of Cage: [panoptes-os/cage](https://github.com/panoptes-os/cage), branch `panoptes` | Upstream Cage cannot set its output size or list windows with their pid and box, and it mishandled X11 dialogs: they lost focus to clicks on their main window and could not resize |
+| Screen | 1024x768 at scale 1 | Anthropic's computer-use guide recommends it for desktops, and it is the cheapest size in desktop.md's token table for every model family there |
+| Driving | panoptes-desk as a Wayland client: screencopy for pixels, a virtual pointer and keyboard for input, the fork's `panoptes_window_v1` for windows | It works the same for every program; CDP reaches only Chromium |
+| Programs | `launch` runs any argv in the agent's kiosk cgroup | Tasks need programs Panoptes does not know in advance |
+| Observation | After each action, wait until the screen stops changing, then report window changes and a screenshot | screencopy reports damage, which the 2026-10-27 row lacked |
+
+## 2026-10-27
+
+Status: accepted, 2026-10-27. The Observation row is superseded by
+2026-10-30.
 
 | Decision | Choice | Why |
 |---|---|---|
@@ -15,7 +32,7 @@ Status: accepted, 2026-10-27.
 | Demo | Mock supplier portals with no API, invoices keyed into ERPNext, 700 agents, `panoptes top` in Alacritty | The source portals are where APIs run out; ERPNext gives ground truth |
 | Demo fixture | ERPNext on Podman | It works; moving it to Docker would add Docker's firewall rules to the host |
 
-## What the kernel features need from the host
+### What the kernel features need from the host
 
 The image checks these at start and refuses to park without them:
 

@@ -6,6 +6,12 @@ them. Numbers come from the test server and its methods in
 [measurements.md](measurements.md); provider limits come from the docs
 linked under [Sources](#sources).
 
+Status: superseded in part on 2026-10-30, by
+[decisions.md](decisions.md#2026-10-30-a-harness-for-any-linux-gui-app).
+Agents now run any Linux program at 1024x768, and panoptes-desk drives a
+fork of Cage over Wayland instead of Chromium over CDP. The measurements
+stand.
+
 ## Summary
 
 - One Cage kiosk per agent, on wlroots' headless backend with the pixman

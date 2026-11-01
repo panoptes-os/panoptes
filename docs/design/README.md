@@ -7,10 +7,10 @@ kernel and inference work pays off.
 
 | Doc | Question | Answer |
 |---|---|---|
-| [desktop.md](desktop.md) | Which compositor, browser, and screen size, and how agents drive them | One Cage per agent, a trimmed Chromium frozen between steps, 1280x720 at scale 1, and panoptes-desk serving its tools over MCP |
+| [desktop.md](desktop.md) | Which compositor, browser, and screen size, and how agents drive them | One Cage per agent, a trimmed Chromium frozen between steps, 1280x720 at scale 1, and panoptes-desk serving its tools over MCP. Superseded in part on 2026-10-30: any program, 1024x768, driven over Wayland |
 | [scheduler.md](scheduler.md) | What an agent container is, and what schedules it | A cgroup tree. A residency manager on each host parks idle kiosks; Kubernetes cannot |
 | [kernel-and-inference.md](kernel-and-inference.md) | Where kernel and inference work pays | Memory parking pays, network work does not, and the GPU sets local density |
-| [decisions.md](decisions.md) | What was decided on 2026-10-27 | Panoptes: an AGPL engine in a Docker image built with Nix, its own agent loop, and MCP for other harnesses |
+| [decisions.md](decisions.md) | What was decided on 2026-10-27 and 2026-10-30 | Panoptes: an AGPL engine in a Docker image built with Nix, its own agent loop, and MCP for other harnesses. Since 2026-10-30, a harness for any Linux GUI program on a Cage fork at 1024x768 |
 | [measurements.md](measurements.md) | How each number was taken | Machine, versions, methods, caveats |
 
 ## Findings

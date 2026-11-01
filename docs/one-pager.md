@@ -1,29 +1,36 @@
 # Panoptes one-pager
 
-As of 2026-10-28. Panoptes runs hundreds of graphical AI agents on one
+As of 2026-10-31. Panoptes runs hundreds of graphical AI agents on one
 Linux host.
 
 ## What it does
 
-Each agent gets its own desktop: a Cage compositor running Chromium. An
-agent signs in to web portals the way a person would, by reading the
-screen and clicking and typing.
+Each agent gets its own Linux desktop: our fork of the Cage compositor at
+1024x768, running whatever programs the agent launches, Wayland or X11. An
+agent works them the way a person would, by reading the screen and
+clicking and typing.
 
 Most of an agent's time goes to waiting for the model. While it waits,
-Panoptes freezes the agent's desktop with cgroup v2, so the page uses no
-CPU. After it has waited a while, Panoptes compresses the desktop's memory
-into zswap. A running desktop holds about 180 MiB; a parked one about 40
-MiB, and it takes about 100 ms to wake and take a screenshot.
+Panoptes freezes the agent's desktop with cgroup v2, so its programs use
+no CPU. After it has waited a while, Panoptes compresses the desktop's
+memory into zswap. Measured with Chromium, a running desktop held about
+180 MiB and a parked one about 40 MiB, and a parked one took about 100 ms
+to wake and take a screenshot.
 
-Agents are driven through `panoptes-desk`, which serves screenshot, click,
-type, key, scroll, navigate, and accessibility-tree tools over MCP. Our own
-agent loop, `panoptes-loop`, drives many agents from one process with any
-OpenAI-compatible model API.
+Agents are driven through `panoptes-desk`, which serves screenshot,
+windows, click, move, drag, scroll, key, type, launch, focus, close, kill,
+and wait tools over MCP, in screen pixels. Each action waits for the
+screen to settle, then reports the windows that opened, closed, or took
+focus. Our own agent loop, `panoptes-loop`, drives many agents from one
+process with any OpenAI-compatible model API; it still speaks the earlier
+desk's browser tools.
 
 ## What we measured
 
 All on one test server: 32 threads, 125 GiB RAM, one RTX 3090. Methods are
-in [design/measurements.md](design/measurements.md).
+in [design/measurements.md](design/measurements.md). These runs used the
+earlier desk, which ran Chromium in each Cage and drove it over the Chrome
+DevTools Protocol.
 
 | Measurement | Result |
 |---|---|
@@ -48,7 +55,7 @@ panoptes-resd      one per host; freezes waiting desktops, parks idle
                    or swap runs low
 agent, one per     its own cgroup tree
 ├─ desk/           panoptes-desk: the tools above, over MCP or a socket
-└─ kiosk/          Cage and Chromium
+└─ kiosk/          the Cage fork, Xwayland, and the programs the agent launched
 panoptes-loop      one process driving every agent's model calls
 panoptes top       terminal view of every agent, read from resd
 ```
@@ -56,21 +63,24 @@ panoptes top       terminal view of every agent, read from resd
 One step:
 
 ```text
-panoptes-loop (or any MCP client): click(...)
+any MCP client: click(x, y)
 └─ panoptes-desk
    ├─ ask resd to thaw or unpark the desktop and raise its CPU weight
-   ├─ click over the Chrome DevTools Protocol, then screenshot
+   ├─ move and press a virtual pointer over Wayland
+   ├─ wait until the screen stops changing, then screenshot it
    └─ tell resd it is done; resd freezes it, and parks it if it stays idle
 ```
 
-The Docker image builds with Nix and runs desks without systemd inside.
-20 agents ran in it under Podman, 20 of 20 correct.
+With the earlier desk, the Docker image, built with Nix and running desks
+without systemd inside, ran 20 agents under Podman, 20 of 20 correct.
 
 ## The demo
 
 In the demo, 700 agents do invoice entry. Each signs in to a mock supplier
 portal with no API, downloads an invoice PDF, and enters it in ERPNext
 against a purchase order. We check every result against ERPNext's records.
+The demo ran on the earlier desk. panoptes-loop has not moved to the
+Wayland desk, so the demo does not run on it yet.
 
 - The fixture has 20 suppliers, 40 items, 1,000 invoices in 20 layouts,
   and 1,000 purchase orders.
@@ -78,8 +88,8 @@ against a purchase order. We check every result against ERPNext's records.
 
 ## Status and where you can help
 
-The 700-agent run passes, 700 of 700. The first attempt scored 403 of 700;
-two host limits caused it, and both are fixed:
+The 700-agent run passed on the earlier desk, 700 of 700. The first
+attempt scored 403 of 700; two host limits caused it, and both are fixed:
 
 | Problem | Cause | Fix |
 |---|---|---|
