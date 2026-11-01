@@ -76,7 +76,7 @@ pub struct Desk {
 struct Thumb {
     path: PathBuf,
     every: Duration,
-    last: Option<Instant>,
+    last: Option<sync::Ms>,
 }
 
 /// Name, description, and JSON Schema of every tool, shared by both front
@@ -297,10 +297,12 @@ impl Desk {
 
     fn thumb_if_due(&mut self) {
         let Some(t) = self.thumb.as_mut() else { return };
-        if t.last.is_some_and(|l| l.elapsed() < t.every) {
+        if t.last
+            .is_some_and(|l| sync::now().saturating_sub(l) < t.every.as_millis() as sync::Ms)
+        {
             return;
         }
-        t.last = Some(Instant::now());
+        t.last = Some(sync::now());
         let path = t.path.clone();
         let Ok(frame) = self.wl.screenshot() else {
             return;
@@ -318,6 +320,13 @@ impl Desk {
     fn call_tool(&mut self, tool: &str, args: &Value) -> Result<Output, String> {
         self.wl.alive()?;
         handoff::drain(&self.changes);
+        #[cfg_attr(
+            panoptes_loom,
+            expect(
+                clippy::disallowed_methods,
+                reason = "times the call for its reply, in fractions of a ms"
+            )
+        )]
         let start = Instant::now();
         match tool {
             "screenshot" => {
@@ -341,6 +350,13 @@ impl Desk {
                 let settled = self.settle(quiet, limit)?;
                 self.report(&mut result, &settled, &before);
 
+                #[cfg_attr(
+                    panoptes_loom,
+                    expect(
+                        clippy::disallowed_methods,
+                        reason = "times the call for its reply, in fractions of a ms"
+                    )
+                )]
                 let shot = Instant::now();
                 let frame = match (screenshot, settled.frame) {
                     (false, _) => None,
@@ -383,6 +399,13 @@ impl Desk {
                 wl.button(button, true);
                 wl.flush()?;
                 for i in 1..=STEPS {
+                    #[cfg_attr(
+                        panoptes_loom,
+                        expect(
+                            clippy::disallowed_methods,
+                            reason = "paces a drag's pointer motion; no model runs this file"
+                        )
+                    )]
                     std::thread::sleep(Duration::from_millis(16));
                     let lerp = |a: u32, b: u32| {
                         (f64::from(a)
@@ -579,6 +602,13 @@ impl Desk {
 
     /// Wait until no frame changes the screen for `quiet`, at most `limit`.
     fn settle(&self, quiet: Duration, limit: Duration) -> Result<Settled, String> {
+        #[cfg_attr(
+            panoptes_loom,
+            expect(
+                clippy::disallowed_methods,
+                reason = "times the settle for its reply; the policy reads sync::now()"
+            )
+        )]
         let start = Instant::now();
         let policy = Settle::new(
             quiet.as_millis() as u64,

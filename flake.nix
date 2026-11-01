@@ -27,7 +27,9 @@
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
           packages = [
+            pkgs.cargo-mutants
             pkgs.jq
+            pkgs.ripgrep
             pkgs.sqlite
             pkgs.lua5_4
             pkgs.shellcheck
@@ -66,7 +68,8 @@
           cargoCheckType = "debug";
         };
         # The loom models, with panoptes-sync swapped to loom: every
-        # library's and binary's `loom_models`. See
+        # library's and binary's `loom_models`. Each crate that uses
+        # panoptes-sync must run at least one. See
         # docs/design/verification.md.
         loom = self.packages.${system}.panoptes.overrideAttrs (old: {
           pname = "panoptes-loom";
@@ -81,7 +84,55 @@
             # So that a model also trips a policy's invariants.
             CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS = "true";
           };
+          checkPhase = ''
+            set -o pipefail
+            cargoCheckHook 2>&1 | tee loom.log
+            bash ${./nix/rules/loom-count.sh} loom.log
+          '';
         });
+        # The verification rules that a script checks: what the policy
+        # files name, and that the rules' two copies agree. See nix/rules.
+        rules =
+          let
+            pkgs = nixpkgs.legacyPackages.${system};
+            script =
+              name:
+              pkgs.writeShellApplication {
+                inherit name;
+                runtimeInputs = [
+                  pkgs.cargo
+                  pkgs.coreutils
+                  pkgs.diffutils
+                  pkgs.gawk
+                  pkgs.gnugrep
+                  pkgs.jq
+                  pkgs.ripgrep
+                ];
+                text = builtins.readFile ./nix/rules/${name}.sh;
+              };
+          in
+          pkgs.runCommand "panoptes-rules"
+            {
+              src = nixpkgs.lib.fileset.toSource {
+                root = ./.;
+                fileset = nixpkgs.lib.fileset.unions [
+                  ./Cargo.toml
+                  ./Cargo.lock
+                  ./crates
+                  ./docs/design/verification.md
+                  ./docs/agents/verification.md
+                ];
+              };
+            }
+            ''
+              cp -r $src source
+              chmod -R u+w source
+              cd source
+              export CARGO_HOME=$TMPDIR/cargo
+              ${script "policy"}/bin/policy
+              ${script "rule-copies"}/bin/rule-copies
+              touch $out
+            '';
         cage-size = nixpkgs.legacyPackages.${system}.callPackage ./nix/tests/cage-size.nix {
           inherit (self.packages.${system}) cage;
         };

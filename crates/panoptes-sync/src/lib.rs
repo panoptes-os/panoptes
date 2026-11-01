@@ -10,6 +10,14 @@
 //! The cfg is not loom's usual `loom`: tokio drops its `net` module under
 //! that name, and the network edges need it.
 
+// The facade is the one crate that names std's threads, locks, channels
+// and clock (threads 3 in docs/design/verification.md).
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    clippy::disallowed_macros
+)]
+
 use std::time::Duration;
 
 #[cfg(not(panoptes_loom))]

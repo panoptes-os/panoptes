@@ -1,0 +1,12 @@
+# cargo-mutants, as nix/rules/mutants.sh runs it.
+exclude_re = [
+  # The loom models and their fakes. cargo-mutants skips cfg(test) code,
+  # but does not see cfg(all(test, panoptes_loom)) as test code.
+  "loom_models::",
+  # resd's socket tests, which are cfg(all(test, not(panoptes_loom))).
+  "socket_tests::",
+  # Debug output, which no test reads.
+  "impl (std::)?fmt::Debug for ",
+  # A policy's check() only asserts; emptying it changes no test's result.
+  "::check with \\(\\)",
+]
