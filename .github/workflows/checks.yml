@@ -57,7 +57,7 @@ jobs:
       - uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
       # the bench scripts are kept as they ran and are not checked
       - name: shellcheck
-        run: nix develop --command shellcheck -s bash nix/entry.sh demo/gen/*.sh
+        run: nix develop --command shellcheck -s bash nix/entry.sh demo/gen/*.sh crates/panoptes-sync/tla/check.sh
 
   build-image:
     runs-on: ubuntu-24.04

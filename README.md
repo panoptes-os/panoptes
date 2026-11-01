@@ -58,6 +58,7 @@ crates/
 ├─ panoptes-cgroup   cgroup v2: freeze, reclaim, weights, clone3 spawn
 ├─ panoptes-desk     per-agent tool server over Wayland: pixels, input, windows; MCP
 ├─ panoptes-resd     freezes and parks agents' desktops
+├─ panoptes-sync     threads, channels and locks: std's, or loom's for the models
 ├─ panoptes-loop     agent loop with an OpenAI-compatible model client
 ├─ panoptes-oracle   scripted model for scale tests
 ├─ panoptes-top      terminal view of every agent
@@ -93,12 +94,14 @@ to end. Run one with `nix build -L .#checks.x86_64-linux.NAME`:
 
 | Check | What it runs |
 |---|---|
+| `unit` | Every crate's tests, except the root-only cgroup tests |
+| `loom` | The loom models, with panoptes-sync swapped to loom; see [verification.md](docs/design/verification.md) |
 | `cage-size` | The fork with no client: the screen is 1024x768, and a malformed size is refused |
 | `cage-windows` | foot, xeyes and a Tk dialog, listed, focused and closed through the fork's window protocol |
 | `window-protocol` | The desk's copy of the window protocol matches the fork's |
 | `desk` | panoptes-desk under systemd in a NixOS VM, driving wev, xev and Tk over MCP |
 
-The first three run in the build sandbox. `desk` needs a VM, because the
+All but `desk` run in the build sandbox. `desk` needs a VM, because the
 sandbox has no cgroupfs; it takes about 30 s on a host with KVM. Without
 KVM the VM is emulated, and the check's timeouts allow for that. In a git
 checkout, flakes see only tracked files: add new files, or build
