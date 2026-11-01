@@ -518,7 +518,7 @@ impl Raw {
         for row in 0..h {
             let src = if self.y_invert { h - 1 - row } else { row };
             let line = &self.data[src * stride..src * stride + w * 4];
-            for px in line.chunks_exact(4) {
+            for px in line.as_chunks::<4>().0 {
                 rgb.extend_from_slice(&[px[r], px[g], px[b]]);
             }
         }
@@ -737,10 +737,9 @@ impl Dispatch<wl_output::WlOutput, ()> for Handler {
             height,
             ..
         } = event
+            && flags.contains(wl_output::Mode::Current)
         {
-            if flags.contains(wl_output::Mode::Current) {
-                *lock(&state.shared.size) = (width as u32, height as u32);
-            }
+            *lock(&state.shared.size) = (width as u32, height as u32);
         }
     }
 }

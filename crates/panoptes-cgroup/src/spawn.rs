@@ -118,7 +118,7 @@ fn cstring(s: &OsStr) -> Result<CString> {
 pub const MAX_CHILD_FD: RawFd = 63;
 
 /// `fds` maps a descriptor of this process to the number the child sees,
-/// such as Chromium's `--remote-debugging-pipe` ends on 3 and 4.
+/// such as a log file on 1 and 2.
 pub(crate) fn spawn_into(
     cgroup: &Path,
     argv: &[&OsStr],

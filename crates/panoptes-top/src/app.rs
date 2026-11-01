@@ -324,8 +324,13 @@ impl App {
             let (w, h) = (info.width as usize, info.height as usize);
             let px = &px[..info.buffer_size()];
             let rgb = match info.color_type {
-                png::ColorType::Rgb => px.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
-                png::ColorType::Rgba => px.chunks_exact(4).map(|c| [c[0], c[1], c[2]]).collect(),
+                png::ColorType::Rgb => px.as_chunks::<3>().0.to_vec(),
+                png::ColorType::Rgba => px
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|&[r, g, b, _]| [r, g, b])
+                    .collect(),
                 png::ColorType::Grayscale => px.iter().map(|&g| [g, g, g]).collect(),
                 _ => return None,
             };

@@ -1,8 +1,6 @@
 name: publish-image
+# Manual only: until v0, an image is published when someone chooses to.
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:

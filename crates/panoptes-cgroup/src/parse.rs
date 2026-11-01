@@ -15,36 +15,9 @@ pub struct Events {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MemoryStat(BTreeMap<String, u64>);
 
-/// One line of a PSI file: the share of wall time some (or all) tasks
-/// stalled, averaged over 10, 60, and 300 s, and the total stall in µs.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PressureLine {
-    pub avg10: f32,
-    pub avg60: f32,
-    pub avg300: f32,
-    pub total_us: u64,
-}
-
-/// A PSI file such as `memory.pressure`. `full` is absent on kernels that
-/// report only `some` for a resource.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Pressure {
-    pub some: PressureLine,
-    pub full: Option<PressureLine>,
-}
-
 impl MemoryStat {
     pub fn get(&self, key: &str) -> Option<u64> {
         self.0.get(key).copied()
-    }
-
-    /// Bytes reclaim can move out of the group: anonymous memory and shmem
-    /// go to zswap or swap, file pages are dropped or written back.
-    pub fn reclaimable(&self) -> u64 {
-        ["anon", "file", "shmem"]
-            .iter()
-            .filter_map(|k| self.get(k))
-            .sum()
     }
 }
 
@@ -78,37 +51,6 @@ pub(crate) fn memory_stat(text: &str) -> Option<MemoryStat> {
         map.insert(k.to_owned(), v.trim().parse().ok()?);
     }
     Some(MemoryStat(map))
-}
-
-pub(crate) fn pressure(text: &str) -> Option<Pressure> {
-    let (mut some, mut full) = (None, None);
-    for line in text.lines().filter(|l| !l.is_empty()) {
-        let (kind, rest) = line.split_once(' ')?;
-        let parsed = pressure_line(rest)?;
-        match kind {
-            "some" => some = Some(parsed),
-            "full" => full = Some(parsed),
-            _ => return None,
-        }
-    }
-    Some(Pressure { some: some?, full })
-}
-
-fn pressure_line(rest: &str) -> Option<PressureLine> {
-    let mut fields = [None; 4];
-    for kv in rest.split_whitespace() {
-        let (k, v) = kv.split_once('=')?;
-        let i = ["avg10", "avg60", "avg300", "total"]
-            .iter()
-            .position(|n| *n == k)?;
-        fields[i] = Some(v);
-    }
-    Some(PressureLine {
-        avg10: fields[0]?.parse().ok()?,
-        avg60: fields[1]?.parse().ok()?,
-        avg300: fields[2]?.parse().ok()?,
-        total_us: fields[3]?.parse().ok()?,
-    })
 }
 
 /// The cgroup v2 path from `/proc/<pid>/cgroup`, from its `0::` line.
@@ -147,23 +89,7 @@ mod tests {
     fn memory_stat_parse() {
         let s = memory_stat("anon 4096\nfile 8192\nshmem 0\nzswap 12\n").unwrap();
         assert_eq!(s.get("zswap"), Some(12));
-        assert_eq!(s.reclaimable(), 12288);
         assert!(memory_stat("anon x\n").is_none());
-    }
-
-    #[test]
-    fn pressure_parse() {
-        let p = pressure(
-            "some avg10=0.12 avg60=1.50 avg300=0.00 total=42\n\
-             full avg10=0.00 avg60=0.00 avg300=0.00 total=7\n",
-        )
-        .unwrap();
-        assert_eq!(p.some.total_us, 42);
-        assert!((p.some.avg60 - 1.5).abs() < f32::EPSILON);
-        assert_eq!(p.full.unwrap().total_us, 7);
-        let only_some = pressure("some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n").unwrap();
-        assert!(only_some.full.is_none());
-        assert!(pressure("some avg10=0.00 total=0\n").is_none());
     }
 
     #[test]

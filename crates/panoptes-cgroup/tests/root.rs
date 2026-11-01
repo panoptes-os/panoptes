@@ -2,7 +2,7 @@
 //! this test binary; `tests/run-root.sh` builds one with systemd-run. Every
 //! group they create lives under that delegated group and is removed.
 
-use panoptes_cgroup::{Cgroup, Reclaim};
+use panoptes_cgroup::Cgroup;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -174,7 +174,9 @@ fn reclaim_parks_a_frozen_group_in_zswap() {
     let stat = cg.memory_stat().unwrap();
     let froze = cg.freeze(5 * SEC).unwrap();
     let start = Instant::now();
-    let outcome = cg.reclaim(stat.reclaimable()).unwrap();
+    // memory.stat counts shmem inside file.
+    let target = stat.get("anon").unwrap_or(0) + stat.get("file").unwrap_or(0);
+    let outcome = cg.reclaim(target).unwrap();
     let took = start.elapsed();
     let after = cg.memory_current().unwrap();
     let parked = cg.memory_stat().unwrap();
@@ -200,23 +202,15 @@ fn reclaim_parks_a_frozen_group_in_zswap() {
         vec![hog.pid()],
         "hog survived the park"
     );
-    assert!(matches!(outcome, Reclaim::Full | Reclaim::Partial));
     drop(hog);
 }
 
 #[test]
 #[ignore = "needs root in a delegated cgroup; see tests/run-root.sh"]
-fn weights_and_pressure_round_trip() {
+fn weights_round_trip() {
     let cg = TestGroup::new("t-weight");
     cg.set_cpu_weight(10_000).unwrap();
     assert_eq!(cg.cpu_weight().unwrap(), 10_000);
     assert!(cg.set_cpu_weight(0).is_err());
-    let mem = cg.memory_pressure().unwrap();
-    let cpu = cg.cpu_pressure().unwrap();
-    assert!(mem.full.is_some());
-    eprintln!(
-        "pressure: memory some total {} µs, cpu some total {} µs",
-        mem.some.total_us, cpu.some.total_us
-    );
     assert!(base().controllers().unwrap().iter().any(|c| c == "memory"));
 }

@@ -281,10 +281,10 @@ impl Keymap {
         if let Some((_, code)) = modifier(&lower) {
             return Some(Stroke::plain(code));
         }
-        if let Some(n) = lower.strip_prefix('f').and_then(|n| n.parse().ok()) {
-            if (1..=24).contains(&n) {
-                return Some(Stroke::plain(function_key(n)));
-            }
+        if let Some(n) = lower.strip_prefix('f').and_then(|n| n.parse().ok())
+            && (1..=24).contains(&n)
+        {
+            return Some(Stroke::plain(function_key(n)));
         }
         let &(_, c) = CHAR_NAMES.iter().find(|(n, _)| *n == lower)?;
         self.stroke(c)

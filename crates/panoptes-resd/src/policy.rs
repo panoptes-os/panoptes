@@ -147,10 +147,10 @@ impl Policy {
     }
 
     fn set(&mut self, agent: &str, state: State, now: Ms) {
-        if let Some(a) = self.agents.get_mut(agent) {
-            if a.state != state {
-                *a = Agent { state, since: now };
-            }
+        if let Some(a) = self.agents.get_mut(agent)
+            && a.state != state
+        {
+            *a = Agent { state, since: now };
         }
     }
 

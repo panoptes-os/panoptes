@@ -14,12 +14,13 @@ rustPlatform.buildRustPackage {
   };
   cargoLock.lockFile = ../Cargo.lock;
 
-  # The cgroup tests need root and a cgroup v2 mount; the bench reruns
-  # cover them.
+  # CI runs `cargo test` (.github/workflows/checks.yml). The cgroup tests
+  # that need root are #[ignore]d; crates/panoptes-cgroup/tests/run-root.sh
+  # runs them.
   doCheck = false;
 
   meta = {
-    description = "Run hundreds of graphical AI agents on one Linux box";
+    description = "A harness and orchestrator for graphical AI agents on Linux";
     license = lib.licenses.agpl3Plus;
     platforms = lib.platforms.linux;
     mainProgram = "panoptes-resd";

@@ -8,7 +8,7 @@
 mod parse;
 mod spawn;
 
-pub use parse::{Events, MemoryStat, Pressure, PressureLine};
+pub use parse::{Events, MemoryStat};
 pub use spawn::{Child, MAX_CHILD_FD};
 
 use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
@@ -180,14 +180,6 @@ impl Cgroup {
             .ok_or_else(|| self.parse_error("memory.stat"))
     }
 
-    pub fn memory_pressure(&self) -> Result<Pressure> {
-        self.pressure("memory.pressure")
-    }
-
-    pub fn cpu_pressure(&self) -> Result<Pressure> {
-        self.pressure("cpu.pressure")
-    }
-
     /// Total CPU time used by the group, in µs.
     pub fn cpu_usage_us(&self) -> Result<u64> {
         parse::cpu_usage_us(&self.read("cpu.stat")?).ok_or_else(|| self.parse_error("cpu.stat"))
@@ -357,10 +349,6 @@ impl Cgroup {
     fn write(&self, file: &str, value: &str) -> Result<()> {
         let path = self.path.join(file);
         std::fs::write(&path, value).map_err(|e| Error::io(&path, e))
-    }
-
-    fn pressure(&self, file: &str) -> Result<Pressure> {
-        parse::pressure(&self.read(file)?).ok_or_else(|| self.parse_error(file))
     }
 
     fn parse_error(&self, file: &str) -> Error {

@@ -55,8 +55,7 @@ invoices. [docs/one-pager.md](docs/one-pager.md) has the numbers, and
 
 ```text
 crates/
-├─ panoptes-cgroup   cgroup v2: freeze, reclaim, weights, PSI, clone3 spawn
-├─ panoptes-cdp      Chrome DevTools Protocol client; unused since the desk left CDP
+├─ panoptes-cgroup   cgroup v2: freeze, reclaim, weights, clone3 spawn
 ├─ panoptes-desk     per-agent tool server over Wayland: pixels, input, windows; MCP
 ├─ panoptes-resd     freezes and parks agents' desktops
 ├─ panoptes-loop     agent loop with an OpenAI-compatible model client

@@ -1,8 +1,8 @@
 # Run with:
 #   podman run --privileged --cgroupns=private --network=host --shm-size=4g \
 #     --pids-limit=-1 panoptes:0.1.0
-# Each desk takes about 155 pids; Podman's default limit of 2048 stops
-# Chromium's threads at about 13 desks.
+# Each desk's programs start many threads, and Podman's default pid limit
+# counts every one of them; --pids-limit=-1 lifts it.
 {
   dockerTools,
   writeShellApplication,
@@ -15,10 +15,8 @@
   coreutils,
   dejavu_fonts,
   gawk,
-  poppler-utils,
   tini,
   util-linux,
-  wlr-randr,
 }:
 
 let
@@ -53,10 +51,8 @@ dockerTools.buildLayeredImage {
     cage
     chromium
     coreutils
-    poppler-utils
     tini
     util-linux
-    wlr-randr
     dockerTools.binSh
   ];
 
@@ -77,7 +73,6 @@ dockerTools.buildLayeredImage {
     ];
     Env = [
       "FONTCONFIG_FILE=${fonts}"
-      "PANOPTES_PDFTOTEXT=pdftotext"
       "SSL_CERT_FILE=${cacert}/etc/ssl/certs/ca-bundle.crt"
     ];
     # links the GHCR package to the repository
