@@ -156,7 +156,7 @@ anyway.
 | 2. A VM check against the real thing | A fake shows how we think the kernel or a peer fails. Only the real one shows how it does |
 | 3. Kill during an operation | A recovery path that never ran is not known to work |
 | 4. `unsafe` in named modules, with `// SAFETY:` | A reviewer finds every unsafe block where they expect it. Clippy's `undocumented_unsafe_blocks` warns on a block without the comment, and CI fails on warnings |
-| 5. Shipped C under ASan and UBSan | Rust's checks do not cover C. The sanitizers find memory errors and undefined behavior that a passing test hides |
+| 5. Shipped C under ASan and UBSan, with the libraries whose objects it holds | Rust's checks do not cover C. The sanitizers find memory errors and undefined behavior that a passing test hides. They see only instrumented code: Cage passed a freed wlroots scene node back to wlroots (upstream Cage issue 545), and the check passed while only Cage was instrumented |
 
 ## tokio
 

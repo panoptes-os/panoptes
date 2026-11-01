@@ -182,9 +182,13 @@ On 2026-11-01, with Aeneas ab34bd28 and Charon 0.1.304:
 4. Keep `unsafe` Rust in modules named for what they wrap, such as a
    system call. Put a `// SAFETY:` comment on every block.
 5. Build C and C++ code that Panoptes ships with
-   `-Db_sanitize=address,undefined` in a separate check, and run its
-   end-to-end scenarios under it. The check fails on any sanitizer report,
-   and on an exit code other than 0, which under ASan includes a leak.
+   `-Db_sanitize=address,undefined` in a separate check, together with
+   the C libraries whose objects it holds, such as wlroots for Cage. ASan
+   reports a bad access only in instrumented code, and a stale pointer to
+   a library's object is often read inside that library. Run its
+   end-to-end scenarios under that build. The check fails on any
+   sanitizer report, and on an exit code other than 0, which under ASan
+   includes a leak.
 
 ## tokio stays at the network edges
 

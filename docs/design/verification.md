@@ -158,9 +158,13 @@ loom's.
 4. Keep `unsafe` Rust in modules named for what they wrap, such as a
    system call. Put a `// SAFETY:` comment on every block.
 5. Build the C and C++ code that Panoptes ships with
-   `-Db_sanitize=address,undefined` in a separate check, and run its
-   end-to-end scenarios under it. The check fails on any sanitizer report
-   and on an exit code other than 0. Under ASan, a leak sets the exit code.
+   `-Db_sanitize=address,undefined` in a separate check. Build the C
+   libraries whose objects it holds the same way, such as wlroots for
+   Cage: ASan reports a bad access only in instrumented code, and a stale
+   pointer to a library's object is often read inside that library. Run
+   the code's end-to-end scenarios under that build. The check fails on
+   any sanitizer report and on an exit code other than 0. Under ASan, a
+   leak sets the exit code.
 
 ## tokio stays at the network edges
 
