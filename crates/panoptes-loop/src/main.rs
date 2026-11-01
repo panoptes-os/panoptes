@@ -19,6 +19,15 @@
 //! An agent's `done` is only its claim. After its run the loop checks the
 //! invoice over ERPNext's REST API (`erp`), and `verified` is that check.
 
+// Not split into policy, threads and I/O yet, so the verification rules'
+// deny-list (nix/rules/clippy.toml) does not apply; see
+// docs/design/verification.md.
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    clippy::disallowed_macros
+)]
+
 mod agent;
 mod config;
 mod desk;

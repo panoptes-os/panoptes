@@ -76,7 +76,7 @@ pub struct Desk {
 struct Thumb {
     path: PathBuf,
     every: Duration,
-    last: Option<Instant>,
+    last: Option<sync::Ms>,
 }
 
 /// Name, description, and JSON Schema of every tool, shared by both front
@@ -297,10 +297,12 @@ impl Desk {
 
     fn thumb_if_due(&mut self) {
         let Some(t) = self.thumb.as_mut() else { return };
-        if t.last.is_some_and(|l| l.elapsed() < t.every) {
+        if t.last
+            .is_some_and(|l| sync::now().saturating_sub(l) < t.every.as_millis() as sync::Ms)
+        {
             return;
         }
-        t.last = Some(Instant::now());
+        t.last = Some(sync::now());
         let path = t.path.clone();
         let Ok(frame) = self.wl.screenshot() else {
             return;
@@ -315,6 +317,13 @@ impl Desk {
         }
     }
 
+    #[cfg_attr(
+        panoptes_loom,
+        expect(
+            clippy::disallowed_methods,
+            reason = "times the call for its reply, in fractions of a ms"
+        )
+    )]
     fn call_tool(&mut self, tool: &str, args: &Value) -> Result<Output, String> {
         self.wl.alive()?;
         handoff::drain(&self.changes);
@@ -576,6 +585,13 @@ impl Desk {
     }
 
     /// Wait until no frame changes the screen for `quiet`, at most `limit`.
+    #[cfg_attr(
+        panoptes_loom,
+        expect(
+            clippy::disallowed_methods,
+            reason = "times the settle for its reply; the policy reads sync::now()"
+        )
+    )]
     fn settle(&self, quiet: Duration, limit: Duration) -> Result<Settled, String> {
         let start = Instant::now();
         let policy = Settle::new(

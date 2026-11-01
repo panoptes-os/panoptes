@@ -6,6 +6,8 @@
 //! `cgroup.freeze`, `memory.zswap.writeback`, and `memory.reclaim`.
 
 mod parse;
+// clone3 into a group, kill and waitpid: the crate's only unsafe code.
+#[allow(unsafe_code)]
 mod spawn;
 
 pub use parse::{Events, MemoryStat};
@@ -206,6 +208,13 @@ impl Cgroup {
         Ok(self.read_u64("cgroup.freeze")? != 0)
     }
 
+    #[cfg_attr(
+        panoptes_loom,
+        expect(
+            clippy::disallowed_methods,
+            reason = "times a kernel wait and its deadline, in fractions of a ms"
+        )
+    )]
     fn set_frozen(&self, frozen: bool, timeout: Duration) -> Result<Duration> {
         let start = Instant::now();
         let watch = self.watch_events()?;
@@ -215,6 +224,13 @@ impl Cgroup {
     }
 
     /// Wait until no process is left in the group or its descendants.
+    #[cfg_attr(
+        panoptes_loom,
+        expect(
+            clippy::disallowed_methods,
+            reason = "times a kernel wait and its deadline, in fractions of a ms"
+        )
+    )]
     pub fn wait_empty(&self, timeout: Duration) -> Result<Duration> {
         let start = Instant::now();
         let watch = self.watch_events()?;

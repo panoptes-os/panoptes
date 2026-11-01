@@ -38,6 +38,14 @@ jobs:
         run: nix develop --command cargo fmt --all --check
       - name: cargo clippy
         run: nix develop --command cargo clippy --workspace --all-targets --locked -- -D warnings
+      # the verification rules' deny-list, under the loom cfg, where
+      # panoptes-sync's types are loom's and only raw std use is flagged;
+      # see nix/rules/clippy.toml
+      - name: cargo clippy, verification rules
+        run: |
+          nix develop --command env CLIPPY_CONF_DIR="$PWD/nix/rules" \
+            RUSTFLAGS="--cfg panoptes_loom" \
+            cargo clippy --workspace --lib --bins --locked -- -D warnings
       # tests that need root and a cgroup v2 mount are #[ignore]d; the
       # cgroup check in nix flake check runs them in a VM
       - name: cargo test
@@ -57,7 +65,25 @@ jobs:
       - uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
       # the bench scripts are kept as they ran and are not checked
       - name: shellcheck
-        run: nix develop --command shellcheck -s bash nix/entry.sh demo/gen/*.sh crates/panoptes-sync/tla/check.sh
+        run: nix develop --command shellcheck -s bash nix/entry.sh demo/gen/*.sh nix/rules/*.sh crates/panoptes-sync/tla/check.sh
+
+  # cargo-mutants on the policy and threads lines that the pull request
+  # changes; see nix/rules/mutants.sh
+  check-mutants:
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+      - name: cargo mutants
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git diff "origin/$BASE_REF...HEAD" > "$RUNNER_TEMP/pr.diff"
+          nix develop --command bash nix/rules/mutants.sh "$RUNNER_TEMP/pr.diff"
 
   build-image:
     runs-on: ubuntu-24.04

@@ -103,6 +103,13 @@ impl Resd {
 }
 
 impl Residency for Resd {
+    #[cfg_attr(
+        panoptes_loom,
+        expect(
+            clippy::disallowed_methods,
+            reason = "times the wake for its reply, in fractions of a ms"
+        )
+    )]
     fn acquire(&mut self) -> Result<Acquired, String> {
         let start = Instant::now();
         let woke = match self.send("acquire") {

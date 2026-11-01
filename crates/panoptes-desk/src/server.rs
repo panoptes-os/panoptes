@@ -173,6 +173,13 @@ where
     }
 }
 
+#[cfg_attr(
+    panoptes_loom,
+    expect(
+        clippy::disallowed_methods,
+        reason = "times the call for its reply, in fractions of a ms"
+    )
+)]
 async fn handle_line(handle: &Handle, line: &str) -> Value {
     let req: Value = match serde_json::from_str(line) {
         Ok(v) => v,
@@ -275,6 +282,13 @@ impl ServerHandler for DeskMcp {
         std::future::ready(Ok(ListToolsResult::with_all_items(list)))
     }
 
+    #[cfg_attr(
+        panoptes_loom,
+        expect(
+            clippy::disallowed_methods,
+            reason = "times the call for its reply, in fractions of a ms"
+        )
+    )]
     fn call_tool(
         &self,
         request: CallToolRequestParams,

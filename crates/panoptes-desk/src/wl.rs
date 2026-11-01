@@ -25,7 +25,7 @@ use std::os::unix::fs::FileExt;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use wayland_client::globals::{BindError, GlobalListContents, registry_queue_init};
 use wayland_client::protocol::{
     wl_buffer, wl_callback, wl_output, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,
@@ -64,8 +64,6 @@ pub struct Wl {
     pointer: pointer::ZwlrVirtualPointerV1,
     keyboard: keyboard::ZwpVirtualKeyboardV1,
     shared: Arc<Shared<window::PanoptesWindowV1>>,
-    /// Zero for input event timestamps.
-    epoch: Instant,
 }
 
 /// A window proxy's desk number, set when the manager announces it. The
@@ -157,7 +155,6 @@ impl Wl {
             pointer,
             keyboard,
             shared,
-            epoch: Instant::now(),
         })
     }
 
@@ -238,8 +235,9 @@ impl Wl {
     // Input requests queue until the caller flushes, so one action's events
     // reach the compositor together.
 
+    /// Input event timestamps: ms since an arbitrary start.
     fn time(&self) -> u32 {
-        self.epoch.elapsed().as_millis() as u32
+        sync::now() as u32
     }
 
     /// Move the pointer to output pixel (x, y).

@@ -170,6 +170,50 @@ The cfg is `panoptes_loom`, not loom's usual `loom`. tokio 1.54.1 gates its
 `net` module on `not(loom)` (`src/net/mod.rs:1`). On 2026-10-31, with
 `--cfg loom`, hyper-util and tokio-tungstenite failed to compile.
 
+## The checks, and the facts they rest on
+
+verification.md lists which check enforces which rule. These facts were
+checked on 2026-11-01.
+
+- The deny-list runs only under `--cfg panoptes_loom`. In a normal build
+  panoptes-sync re-exports std's types, and clippy names a type by where it
+  is defined, so it flagged `sync::Mutex` as `std::sync::Mutex`. Under the
+  loom cfg the facade's types are loom's, and only raw std use was flagged.
+- The deny-list lives in `nix/rules/`, which is above no crate, and the
+  loom pass names it with `CLIPPY_CONF_DIR`. clippy also reads a
+  `clippy.toml` from any directory above a crate: a stray one above a
+  scratch workspace changed its results.
+- A waiver is `cfg_attr(panoptes_loom, expect(...))`. Plain clippy, and
+  rustc under the loom cfg, ignored it. The loom pass failed on a waiver
+  with nothing left to waive (clippy 0.1.99).
+- The first deny-list run over the workspace found 53 uses. 39 were in
+  panoptes-loop, panoptes-top and panoptes-oracle, which are not split and
+  allow the deny-list at their roots. Of the 14 in desk, resd and cgroup,
+  3 moved to `sync::now()` with the same meaning; 11 are timings, in
+  fractions of a ms, for replies and logs, and are waived.
+- The policy check reads text, not types. A policy that reaches a
+  forbidden item through a name defined elsewhere passes it. A policy
+  crate with `#![no_std]` and no dependencies would make the compiler
+  enforce policy 2; that split is not done.
+- cargo-mutants checks only the lines a pull request changes, because a
+  run over every line fails today. These mutants survive every test and
+  model: in resd's `policy.rs`, 11, at lines 199, 231, 245, 271, 306 and
+  353; in `worker.rs`, 4, at lines 59 and 63; in `owner.rs`, 23, in
+  `discover`, `found`, `save`, `note`, `snapshot`, `request`, `done` and
+  `run`. desk's loom models caught every mutant of `owner.rs`.
+- cargo-mutants skips `cfg(test)` code but not `cfg(all(test,
+  panoptes_loom))`, so `.cargo/mutants.toml` skips `loom_models`. It also
+  skips hand-written `Debug` impls and an emptied `check`, which no test
+  can tell apart.
+- On GitHub's runner, the deny-list pass took 1 min 25 s. cargo-mutants
+  on a diff that touched desk's `lease.rs` and `owner.rs` took 4 min
+  45 s: 13 policy mutants in 2 min after a 42 s build, then 3 threads
+  mutants in 3 min after a 74 s release build.
+- Each check failed on a planted violation: a raw `std::thread::spawn` in
+  resd's owner, a stale waiver, a policy file that imports `std::fs` and
+  takes an `impl Fn`, an agents' copy with one rule fewer, and a loom log
+  in which resd ran no model.
+
 ## Tools left out
 
 | Tool | Why not |
@@ -190,3 +234,5 @@ The cfg is `panoptes_loom`, not loom's usual `loom`. tokio 1.54.1 gates its
 | Kani is in nixpkgs at the flake's pin | It could replace hand-written enumeration in the exhaustive tests |
 | A protocol stays too large for loom after it is split | shuttle |
 | A measurement shows that a threads layer needs async | The tokio rules |
+| Each policy moves to a `#![no_std]` crate with no dependencies | The compiler can enforce policy 2, and the policy script shrinks |
+| The gaps above get tests | cargo-mutants can check every line, not only changed ones |
