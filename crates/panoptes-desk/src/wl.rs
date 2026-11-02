@@ -2,29 +2,30 @@
 //! virtual pointer and keyboard give input, and panoptes_window_v1 gives
 //! the window list.
 //!
-//! One thread reads and dispatches events for the life of the connection,
-//! so the compositor never stalls on a client that stopped reading. Tools
-//! send requests from the runtime's threads and await what the handlers
-//! record:
+//! The I/O layer. One thread reads and dispatches events for the life of
+//! the connection, so the compositor never stalls on a client that stopped
+//! reading. The desk thread sends requests and waits for what the handlers
+//! hand over through [`crate::handoff`]:
 //!
 //! ```text
-//! tool ───── request ─────────────────────> cage
-//!   ^ oneshot: frame, sync                   │ events
-//!   ^ watch:   window changes                v
-//!   └──────────────── event thread: Handler ─> Shared
+//! desk thread ── request ──────────────────> cage
+//!   ^ Request: frame, sync                    │ events
+//!   ^ Change:  window changes                 v
+//!   └─────────────── event thread: Handler ─> Shared
 //! ```
 
+use crate::handoff::{Release, Request, Shared};
 use crate::keymap::KeyEvent;
 use crate::protocol::{panoptes_window_manager_v1 as manager, panoptes_window_v1 as window};
-use std::collections::BTreeMap;
+use crate::windows::{self, Windows};
+use panoptes_sync::{self as sync, Arc, mpsc};
 use std::fs::File;
 use std::os::fd::AsFd;
 use std::os::unix::fs::FileExt;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-use tokio::sync::{oneshot, watch};
 use wayland_client::globals::{BindError, GlobalListContents, registry_queue_init};
 use wayland_client::protocol::{
     wl_buffer, wl_callback, wl_output, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,
@@ -46,30 +47,6 @@ use wayland_protocols_wlr::virtual_pointer::v1::client::{
 /// as stuck.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// One window as the compositor last described it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Window {
-    /// The desk's number for the window, in the order windows mapped.
-    pub id: u32,
-    pub pid: i32,
-    pub app_id: String,
-    pub title: String,
-    pub x: i32,
-    pub y: i32,
-    pub width: i32,
-    pub height: i32,
-    pub focused: bool,
-    /// The window this one is a dialog of.
-    pub parent: Option<u32>,
-}
-
-/// The listed windows, in the order they mapped, and Xwayland's DISPLAY.
-#[derive(Debug, Clone, Default)]
-pub struct Windows {
-    pub xwayland: Option<String>,
-    pub list: Vec<Window>,
-}
-
 /// A captured frame as packed RGB, top row first.
 #[derive(Debug, Clone)]
 pub struct Frame {
@@ -86,44 +63,9 @@ pub struct Wl {
     screencopy: screencopy::ZwlrScreencopyManagerV1,
     pointer: pointer::ZwlrVirtualPointerV1,
     keyboard: keyboard::ZwpVirtualKeyboardV1,
-    shared: Arc<Shared>,
+    shared: Arc<Shared<window::PanoptesWindowV1>>,
     /// Zero for input event timestamps.
     epoch: Instant,
-}
-
-/// What the event thread records for tools to read.
-#[derive(Debug)]
-struct Shared {
-    windows: Mutex<WindowTable>,
-    /// Marked at every window's done or closed, and when the event thread
-    /// stops.
-    changes: watch::Sender<()>,
-    /// The output's current mode.
-    size: Mutex<(u32, u32)>,
-    /// Why the event thread stopped, once it has.
-    lost: Mutex<Option<String>>,
-}
-
-impl Shared {
-    fn changed(&self) {
-        self.changes.send_replace(());
-    }
-}
-
-#[derive(Debug, Default)]
-struct WindowTable {
-    xwayland: Option<String>,
-    next_id: u32,
-    entries: BTreeMap<u32, Entry>,
-}
-
-#[derive(Debug)]
-struct Entry {
-    handle: window::PanoptesWindowV1,
-    /// Properties as they arrive.
-    pending: Window,
-    /// Properties at the last done; none before the first.
-    shown: Option<Window>,
 }
 
 /// A window proxy's desk number, set when the manager announces it. The
@@ -138,14 +80,25 @@ fn window_id(w: &window::PanoptesWindowV1) -> Option<u32> {
 /// The event thread's dispatch state.
 #[derive(Debug)]
 struct Handler {
-    shared: Arc<Shared>,
+    shared: Arc<Shared<window::PanoptesWindowV1>>,
     shm: wl_shm::WlShm,
 }
 
+/// A capture's reply: the pixels, or why there are none.
+type Captured = Result<Raw, String>;
+/// A capture in flight and where its reply comes.
+type Pending = (Arc<Request<Capture, Captured>>, mpsc::Receiver<Captured>);
+
 impl Wl {
     /// Connect to the compositor at `socket`, bind everything the desk
-    /// drives, and start the event thread.
-    pub fn connect(socket: &Path) -> Result<Wl, String> {
+    /// drives, and start the event thread, which records into `shared`.
+    /// When the connection breaks, the event thread records why and calls
+    /// `lost` with it.
+    pub fn connect(
+        socket: &Path,
+        shared: Arc<Shared<window::PanoptesWindowV1>>,
+        lost: impl FnOnce(String) + Send + 'static,
+    ) -> Result<Wl, String> {
         let stream =
             UnixStream::connect(socket).map_err(|e| format!("{}: {e}", socket.display()))?;
         let conn = Connection::from_socket(stream).map_err(|e| e.to_string())?;
@@ -177,12 +130,6 @@ impl Wl {
             pointers.create_virtual_pointer_with_output(Some(&seat), Some(&output), &qh, ());
         let keyboard = keyboards.create_virtual_keyboard(&seat, &qh, ());
 
-        let shared = Arc::new(Shared {
-            windows: Mutex::default(),
-            changes: watch::channel(()).0,
-            size: Mutex::default(),
-            lost: Mutex::default(),
-        });
         let mut handler = Handler {
             shared: shared.clone(),
             shm,
@@ -190,21 +137,18 @@ impl Wl {
         // Binding the window manager sends every window's state before the
         // roundtrip's reply.
         queue.roundtrip(&mut handler).map_err(|e| e.to_string())?;
-        if *lock(&shared.size) == (0, 0) {
+        if shared.size() == (0, 0) {
             return Err("the output reported no current mode".into());
         }
-        std::thread::Builder::new()
-            .name("wayland".into())
-            .spawn(move || {
-                let err = loop {
-                    if let Err(e) = queue.blocking_dispatch(&mut handler) {
-                        break e;
-                    }
-                };
-                *lock(&handler.shared.lost) = Some(err.to_string());
-                handler.shared.changed();
-            })
-            .map_err(|e| format!("event thread: {e}"))?;
+        sync::spawn("wayland", move || {
+            let err = loop {
+                if let Err(e) = queue.blocking_dispatch(&mut handler) {
+                    break e.to_string();
+                }
+            };
+            handler.shared.lose(err.clone());
+            lost(err);
+        });
         Ok(Wl {
             conn,
             qh,
@@ -219,33 +163,17 @@ impl Wl {
 
     /// Fail once the connection to the compositor is gone.
     pub fn alive(&self) -> Result<(), String> {
-        match lock(&self.shared.lost).as_ref() {
-            Some(e) => Err(format!("lost the compositor: {e}")),
-            None => Ok(()),
-        }
+        self.shared.alive()
     }
 
     /// The output's size in pixels: the space of screenshots and pointer
     /// coordinates.
     pub fn size(&self) -> (u32, u32) {
-        *lock(&self.shared.size)
+        self.shared.size()
     }
 
     pub fn windows(&self) -> Windows {
-        let table = lock(&self.shared.windows);
-        Windows {
-            xwayland: table.xwayland.clone(),
-            list: table
-                .entries
-                .values()
-                .filter_map(|e| e.shown.clone())
-                .collect(),
-        }
-    }
-
-    /// A receiver that changes at every window change.
-    pub fn window_changes(&self) -> watch::Receiver<()> {
-        self.shared.changes.subscribe()
+        self.shared.windows()
     }
 
     /// Raise window `id` and give it keyboard focus.
@@ -261,55 +189,50 @@ impl Wl {
     }
 
     fn handle(&self, id: u32) -> Result<window::PanoptesWindowV1, String> {
-        let table = lock(&self.shared.windows);
-        match table.entries.get(&id) {
-            Some(e) if e.shown.is_some() => Ok(e.handle.clone()),
-            _ => Err(format!("no window {id}")),
-        }
+        self.shared
+            .handle(id)
+            .ok_or_else(|| format!("no window {id}"))
     }
 
     /// Capture the output at its next frame.
-    pub async fn screenshot(&self) -> Result<Frame, String> {
-        self.capture(false)?
-            .wait(REPLY_TIMEOUT)
-            .await?
-            .ok_or_else(|| "the compositor sent no frame".into())
+    pub fn screenshot(&self) -> Result<Frame, String> {
+        let (req, rx) = self.capture(false)?;
+        req.wait_reply(&rx, REPLY_TIMEOUT, "a frame from the compositor")??
+            .to_frame()
     }
 
     /// Capture the next frame that changes the screen since this client's
     /// last such capture, waiting at most `within`; `None` if nothing
     /// changed.
-    pub async fn next_change(&self, within: Duration) -> Result<Option<Frame>, String> {
-        self.capture(true)?.wait(within).await
+    pub fn next_change(&self, within: Duration) -> Result<Option<Frame>, String> {
+        let (req, rx) = self.capture(true)?;
+        let deadline = sync::now() + within.as_millis() as u64;
+        match req.wait_timer(&rx, deadline) {
+            Some(raw) => raw?.to_frame().map(Some),
+            None => Ok(None),
+        }
     }
 
     fn capture(&self, damage: bool) -> Result<Pending, String> {
-        let (tx, rx) = oneshot::channel();
-        let capture = Arc::new(Capture {
+        let (req, rx) = Request::new(Capture {
             damage,
-            state: Mutex::new(CaptureState {
-                reply: Some(tx),
-                ..CaptureState::default()
-            }),
+            ..Capture::default()
         });
         let frame = self
             .screencopy
-            .capture_output(0, &self.output, &self.qh, capture.clone());
+            .capture_output(0, &self.output, &self.qh, req.clone());
+        // Before the flush, so no event for the frame can come first.
+        req.with(|c| c.frame = Some(frame));
         self.flush()?;
-        Ok(Pending { frame, capture, rx })
+        Ok((req, rx))
     }
 
     /// Wait until the compositor has handled every request sent so far.
-    pub async fn sync(&self) -> Result<(), String> {
-        let (tx, rx) = oneshot::channel();
-        self.conn
-            .display()
-            .sync(&self.qh, SyncReply(Mutex::new(Some(tx))));
+    pub fn sync(&self) -> Result<(), String> {
+        let (req, rx) = Request::new(());
+        self.conn.display().sync(&self.qh, req.clone());
         self.flush()?;
-        match tokio::time::timeout(REPLY_TIMEOUT, rx).await {
-            Ok(Ok(())) => Ok(()),
-            _ => Err("the compositor did not answer a sync".into()),
-        }
+        req.wait_reply(&rx, REPLY_TIMEOUT, "a sync from the compositor")
     }
 
     // Input requests queue until the caller flushes, so one action's events
@@ -356,7 +279,7 @@ impl Wl {
 
     /// Replace the keyboard's keymap with xkb text and wait until the
     /// compositor has it, so the keys after it use it.
-    pub async fn keymap(&self, text: &str) -> Result<(), String> {
+    pub fn keymap(&self, text: &str) -> Result<(), String> {
         let fd = rustix::fs::memfd_create("panoptes-keymap", rustix::fs::MemfdFlags::CLOEXEC)
             .map_err(|e| format!("memfd: {e}"))?;
         let file = File::from(fd);
@@ -366,7 +289,7 @@ impl Wl {
             .map_err(|e| format!("keymap: {e}"))?;
         // WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1
         self.keyboard.keymap(1, file.as_fd(), bytes.len() as u32);
-        self.sync().await
+        self.sync()
     }
 
     /// Send key events. Keys need a keymap that binds them, and modifier
@@ -389,63 +312,19 @@ impl Wl {
     }
 }
 
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|p| p.into_inner())
-}
-
 fn lacks(global: &'static str) -> impl FnOnce(BindError) -> String {
     move |e| format!("the compositor lacks {global}: {e}")
 }
 
-/// A capture in flight.
-#[derive(Debug)]
-struct Pending {
-    frame: frame::ZwlrScreencopyFrameV1,
-    capture: Arc<Capture>,
-    rx: oneshot::Receiver<Result<Raw, String>>,
-}
-
-impl Pending {
-    /// The frame, or `None` if it did not arrive within `within`; then the
-    /// capture is abandoned.
-    async fn wait(mut self, within: Duration) -> Result<Option<Frame>, String> {
-        let reply = match tokio::time::timeout(within, &mut self.rx).await {
-            Ok(reply) => reply,
-            Err(_) => {
-                // The handler replies under this lock, so after it either
-                // the reply is in the channel or it never will be.
-                let mut state = lock(&self.capture.state);
-                state.abandoned = true;
-                state.release(&self.frame);
-                drop(state);
-                match self.rx.try_recv() {
-                    Ok(raw) => Ok(raw),
-                    Err(_) => return Ok(None),
-                }
-            }
-        };
-        match reply {
-            Ok(raw) => raw?.to_frame().map(Some),
-            Err(_) => Err("lost the compositor during a capture".into()),
-        }
-    }
-}
-
 /// One screencopy request, filled in by the frame's handler.
-#[derive(Debug)]
-struct Capture {
-    damage: bool,
-    state: Mutex<CaptureState>,
-}
-
 #[derive(Debug, Default)]
-struct CaptureState {
+struct Capture {
+    /// Copy only once the screen changes.
+    damage: bool,
+    frame: Option<frame::ZwlrScreencopyFrameV1>,
     offer: Option<Offer>,
     shm: Option<Shm>,
     y_invert: bool,
-    reply: Option<oneshot::Sender<Result<Raw, String>>>,
-    /// The tool stopped waiting and destroyed the frame.
-    abandoned: bool,
 }
 
 /// The shm buffer the compositor asked for.
@@ -457,9 +336,9 @@ struct Offer {
     stride: u32,
 }
 
-impl CaptureState {
+impl Capture {
     /// The copied pixels, once the frame is ready.
-    fn read(&self) -> Result<Raw, String> {
+    fn read(&self) -> Captured {
         let (Some(offer), Some(shm)) = (self.offer, self.shm.as_ref()) else {
             return Err("a frame was ready before its buffer".into());
         };
@@ -473,20 +352,16 @@ impl CaptureState {
             data,
         })
     }
+}
 
+impl Release for Capture {
     /// Destroy the frame, then its buffer.
-    fn release(&mut self, frame: &frame::ZwlrScreencopyFrameV1) {
-        frame.destroy();
+    fn release(&mut self) {
+        if let Some(frame) = self.frame.take() {
+            frame.destroy();
+        }
         if let Some(shm) = self.shm.take() {
             shm.destroy();
-        }
-    }
-
-    /// Release the frame and hand the tool its result.
-    fn finish(&mut self, frame: &frame::ZwlrScreencopyFrameV1, result: Result<Raw, String>) {
-        self.release(frame);
-        if let Some(tx) = self.reply.take() {
-            let _ = tx.send(result);
         }
     }
 }
@@ -565,20 +440,16 @@ impl Shm {
     }
 }
 
-impl Dispatch<frame::ZwlrScreencopyFrameV1, Arc<Capture>> for Handler {
+impl Dispatch<frame::ZwlrScreencopyFrameV1, Arc<Request<Capture, Captured>>> for Handler {
     fn event(
         state: &mut Self,
         proxy: &frame::ZwlrScreencopyFrameV1,
         event: frame::Event,
-        capture: &Arc<Capture>,
+        req: &Arc<Request<Capture, Captured>>,
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        let mut c = lock(&capture.state);
-        if c.abandoned {
-            return;
-        }
-        match event {
+        req.handle(|c| match event {
             frame::Event::Buffer {
                 format: WEnum::Value(format),
                 width,
@@ -591,38 +462,33 @@ impl Dispatch<frame::ZwlrScreencopyFrameV1, Arc<Capture>> for Handler {
                     height,
                     stride,
                 });
+                None
             }
             frame::Event::Flags { flags } => {
                 c.y_invert = matches!(flags, WEnum::Value(f) if f.contains(frame::Flags::YInvert));
+                None
             }
             frame::Event::BufferDone => {
-                let shm = match c.offer {
-                    Some(offer) => {
-                        Shm::new(&state.shm, qh, offer).map_err(|e| format!("frame buffer: {e}"))
-                    }
-                    None => Err("the compositor offered no shm buffer".into()),
+                let Some(offer) = c.offer else {
+                    return Some(Err("the compositor offered no shm buffer".into()));
                 };
-                match shm {
+                match Shm::new(&state.shm, qh, offer) {
                     Ok(shm) => {
-                        if capture.damage {
+                        if c.damage {
                             proxy.copy_with_damage(&shm.buffer);
                         } else {
                             proxy.copy(&shm.buffer);
                         }
                         c.shm = Some(shm);
+                        None
                     }
-                    Err(e) => c.finish(proxy, Err(e)),
+                    Err(e) => Some(Err(format!("frame buffer: {e}"))),
                 }
             }
-            frame::Event::Ready { .. } => {
-                let raw = c.read();
-                c.finish(proxy, raw);
-            }
-            frame::Event::Failed => {
-                c.finish(proxy, Err("the compositor failed to copy a frame".into()));
-            }
-            _ => {}
-        }
+            frame::Event::Ready { .. } => Some(c.read()),
+            frame::Event::Failed => Some(Err("the compositor failed to copy a frame".into())),
+            _ => None,
+        });
     }
 }
 
@@ -635,25 +501,13 @@ impl Dispatch<manager::PanoptesWindowManagerV1, ()> for Handler {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        let mut table = lock(&state.shared.windows);
         match event {
-            manager::Event::Xwayland { display } => table.xwayland = Some(display),
+            manager::Event::Xwayland { display } => state.shared.set_xwayland(display),
             manager::Event::Window { window } => {
-                table.next_id += 1;
-                let id = table.next_id;
-                let slot = window.data::<WindowId>().expect("created with a WindowId");
-                slot.0.set(id).expect("a new window has no id yet");
-                table.entries.insert(
-                    id,
-                    Entry {
-                        handle: window,
-                        pending: Window {
-                            id,
-                            ..Window::default()
-                        },
-                        shown: None,
-                    },
-                );
+                let id = state.shared.announce(window.clone());
+                if let Some(slot) = window.data::<WindowId>() {
+                    let _ = slot.0.set(id);
+                }
             }
         }
     }
@@ -672,53 +526,35 @@ impl Dispatch<window::PanoptesWindowV1, WindowId> for Handler {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        // The manager's window event, which sets the id, comes first.
-        let id = *id.0.get().expect("window events follow its announcement");
-        let mut table = lock(&state.shared.windows);
-        let changed = match event {
-            window::Event::Closed => {
-                table.entries.remove(&id);
-                proxy.destroy();
-                true
-            }
-            event => {
-                let entry = table
-                    .entries
-                    .get_mut(&id)
-                    .expect("an open window has an entry");
-                entry.apply(event)
-            }
-        };
-        drop(table);
-        if changed {
-            state.shared.changed();
-        }
-    }
-}
-
-impl Entry {
-    /// Record one event; true at done, which shows the pending state.
-    fn apply(&mut self, event: window::Event) -> bool {
-        let w = &mut self.pending;
-        match event {
-            window::Event::Pid { pid } => w.pid = pid,
-            window::Event::AppId { app_id } => w.app_id = app_id,
-            window::Event::Title { title } => w.title = title,
+        // The manager's window event, which sets the id, comes first; a
+        // window without one is ignored.
+        let Some(&id) = id.0.get() else { return };
+        let event = match event {
+            window::Event::Pid { pid } => windows::Event::Pid(pid),
+            window::Event::AppId { app_id } => windows::Event::AppId(app_id),
+            window::Event::Title { title } => windows::Event::Title(title),
             window::Event::Geometry {
                 x,
                 y,
                 width,
                 height,
-            } => (w.x, w.y, w.width, w.height) = (x, y, width, height),
-            window::Event::Parent { parent } => w.parent = parent.as_ref().and_then(window_id),
-            window::Event::Focused { focused } => w.focused = focused != 0,
-            window::Event::Done => {
-                self.shown = Some(self.pending.clone());
-                return true;
+            } => windows::Event::Geometry {
+                x,
+                y,
+                width,
+                height,
+            },
+            window::Event::Parent { parent } => {
+                windows::Event::Parent(parent.as_ref().and_then(window_id))
             }
-            window::Event::Closed => unreachable!("the caller drops closed windows"),
-        }
-        false
+            window::Event::Focused { focused } => windows::Event::Focused(focused != 0),
+            window::Event::Done => windows::Event::Done,
+            window::Event::Closed => {
+                proxy.destroy();
+                windows::Event::Closed
+            }
+        };
+        state.shared.apply(id, event);
     }
 }
 
@@ -739,27 +575,21 @@ impl Dispatch<wl_output::WlOutput, ()> for Handler {
         } = event
             && flags.contains(wl_output::Mode::Current)
         {
-            *lock(&state.shared.size) = (width as u32, height as u32);
+            state.shared.set_size(width as u32, height as u32);
         }
     }
 }
 
-/// The sender a sync's callback completes.
-#[derive(Debug)]
-struct SyncReply(Mutex<Option<oneshot::Sender<()>>>);
-
-impl Dispatch<wl_callback::WlCallback, SyncReply> for Handler {
+impl Dispatch<wl_callback::WlCallback, Arc<Request<(), ()>>> for Handler {
     fn event(
         _: &mut Self,
         _: &wl_callback::WlCallback,
         _: wl_callback::Event,
-        reply: &SyncReply,
+        req: &Arc<Request<(), ()>>,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let Some(tx) = lock(&reply.0).take() {
-            let _ = tx.send(());
-        }
+        req.handle(|_| Some(()));
     }
 }
 
