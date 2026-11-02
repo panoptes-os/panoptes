@@ -1,6 +1,6 @@
-//! Residency policy: a pure state machine from events and a clock to
-//! actions. It does no I/O; the daemon applies the actions it returns and
-//! reports what it observes back as events.
+//! Residency policy: a pure state machine from inputs and a clock to
+//! effects. No I/O, clock or threads. The owner thread carries out the
+//! effects it returns and reports what it observes back as inputs.
 //!
 //! ```text
 //! starting ─release─> waiting ─park_after or memory low─> parked
@@ -12,13 +12,19 @@
 //! resd killed it); acquire fails until it runs again. resd never kills a
 //! kiosk itself, because nothing relaunches one yet.
 //! ```
+//!
+//! A parked kiosk is frozen at once, and reclaimed into zswap once a slot
+//! is free: at most `park_jobs` reclaims run at once, first come first.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
-/// Milliseconds on the daemon's monotonic clock.
+/// Milliseconds on the daemon's clock.
 pub type Ms = u64;
+/// An agent. The owner numbers agents in the order it finds them and never
+/// reuses a number.
+pub type Id = u32;
 
-/// An agent's residency, with the time it entered that state.
+/// An agent's residency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
     /// Running, never handed to the policy by its desk.
@@ -27,7 +33,7 @@ pub enum State {
     Acting,
     /// Frozen while its agent waits.
     Waiting,
-    /// Frozen and reclaimed into zswap.
+    /// Frozen, and reclaimed into zswap or queued for it.
     Parked,
     /// The kiosk has no processes.
     Evicted,
@@ -56,45 +62,79 @@ impl State {
     }
 }
 
+/// Where an agent's reclaim stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Job {
+    None,
+    /// Parked, waiting for a free slot.
+    Queued,
+    /// A worker is reclaiming the kiosk.
+    Running,
+    /// Running, and parked again since it started: an acquire stopped that
+    /// reclaim, so queue another once it ends.
+    Rerun,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Agent {
     pub state: State,
+    /// When the agent entered `state`.
     pub since: Ms,
+    pub job: Job,
+    /// How many thaws and freezes it has been issued; numbers the last one.
+    pub seq: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Event {
-    /// Discovery found a kiosk. `frozen` and `populated` come from its
-    /// `cgroup.events`; `saved` is the state file's entry, if any.
+pub enum Input {
+    /// Discovery found a kiosk. `frozen` is what its `cgroup.freeze` asks
+    /// for, `populated` what its `cgroup.events` says, and `saved` the state
+    /// file's entry. A known kiosk with no processes is evicted.
     Found {
-        agent: String,
+        id: Id,
         frozen: bool,
         populated: bool,
         saved: Option<State>,
     },
-    /// The kiosk's processes are gone, or its cgroup is.
-    Lost {
-        agent: String,
+    /// The agent's cgroup is gone.
+    Gone {
+        id: Id,
     },
     Acquire {
-        agent: String,
+        id: Id,
     },
     Release {
-        agent: String,
+        id: Id,
     },
-    /// Periodic check, with the host's MemAvailable in bytes.
+    /// The periodic check, with the host's MemAvailable in bytes.
     Tick {
         mem_available: u64,
     },
+    /// A reclaim ended: finished, stopped early, or failed.
+    Reclaimed {
+        id: Id,
+    },
+    /// An effect failed. `frozen` is what the kiosk's `cgroup.freeze` asks
+    /// for now. A freeze that timed out still asks for frozen, and the
+    /// kernel may finish it later. `seq` is the agent's `seq` when the
+    /// effect was issued.
+    Failed {
+        id: Id,
+        frozen: bool,
+        seq: u64,
+    },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Action {
-    Thaw(String),
-    Freeze(String),
-    /// Reclaim a frozen kiosk into zswap with writeback off.
-    Park(String),
-    Weight(String, u16),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Effect {
+    Thaw,
+    Freeze,
+    /// Set the kiosk's CPU weight. Best effort: a failure changes nothing
+    /// the policy tracks.
+    Weight(u16),
+    /// Reclaim the frozen kiosk into zswap with writeback off, and answer
+    /// with `Reclaimed` however it ends.
+    Park,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -105,6 +145,8 @@ pub struct Config {
     pub mem_low: u64,
     /// Agents parked early per tick while memory is low.
     pub pressure_batch: usize,
+    /// Reclaims running at once.
+    pub park_jobs: u32,
     pub weight_acting: u16,
     pub weight_idle: u16,
 }
@@ -115,6 +157,7 @@ impl Default for Config {
             park_after: 30_000,
             mem_low: 4 << 30,
             pressure_batch: 8,
+            park_jobs: 4,
             weight_acting: 10_000,
             weight_idle: 100,
         }
@@ -122,16 +165,23 @@ impl Default for Config {
 }
 
 /// Why an acquire cannot proceed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {
     Unknown,
     Evicted,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Policy {
     pub cfg: Config,
-    agents: BTreeMap<String, Agent>,
+    agents: BTreeMap<Id, Agent>,
+    /// Parked agents waiting for a reclaim slot, first come first.
+    queue: VecDeque<Id>,
+    /// Agents whose job is `Running` or `Rerun`.
+    running: u32,
+    /// Counts changes to the agents and their states, so the owner can
+    /// save them only when they changed.
+    version: u64,
 }
 
 impl Policy {
@@ -139,123 +189,260 @@ impl Policy {
         Policy {
             cfg,
             agents: BTreeMap::new(),
+            queue: VecDeque::new(),
+            running: 0,
+            version: 0,
         }
     }
 
-    pub fn agents(&self) -> &BTreeMap<String, Agent> {
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    pub fn agents(&self) -> &BTreeMap<Id, Agent> {
         &self.agents
     }
 
-    fn set(&mut self, agent: &str, state: State, now: Ms) {
-        if let Some(a) = self.agents.get_mut(agent)
-            && a.state != state
-        {
-            *a = Agent { state, since: now };
-        }
+    pub fn state(&self, id: Id) -> Option<State> {
+        self.agents.get(&id).map(|a| a.state)
     }
 
-    /// Apply one event at time `now`. Acquire returns `Err` when the agent
-    /// cannot act; every other event succeeds.
-    pub fn handle(&mut self, ev: Event, now: Ms) -> Result<Vec<Action>, Refusal> {
+    /// Apply one input at `now`. Acquire returns `Err` when the agent cannot
+    /// act; every other input succeeds. Each effect names its agent.
+    pub fn step(&mut self, input: Input, now: Ms) -> Result<Vec<(Id, Effect)>, Refusal> {
         let mut out = Vec::new();
-        match ev {
-            Event::Found {
-                agent,
+        let r = self.apply(input, now, &mut out);
+        self.start_reclaims(&mut out);
+        if cfg!(debug_assertions) {
+            self.check();
+        }
+        r.map(|()| out)
+    }
+
+    fn apply(&mut self, input: Input, now: Ms, out: &mut Vec<(Id, Effect)>) -> Result<(), Refusal> {
+        match input {
+            Input::Found {
+                id,
                 frozen,
                 populated,
                 saved,
-            } => {
-                if let Some(a) = self.agents.get(&agent) {
-                    // A restarted kiosk comes back as a new start.
-                    if a.state == State::Evicted && populated && !frozen {
-                        self.set(&agent, State::Starting, now);
-                    }
-                    return Ok(out);
+            } => match self.state(id) {
+                Some(_) if !populated => {
+                    self.unpark(id);
+                    self.set(id, State::Evicted, now);
                 }
-                // Recovery never thaws or kills: a frozen kiosk stays
-                // frozen, and the state file only says whether it was
-                // parked.
-                let state = match (populated, frozen, saved) {
-                    (false, _, _) => State::Evicted,
-                    (true, true, Some(State::Parked)) => State::Parked,
-                    (true, true, _) => State::Waiting,
-                    (true, false, Some(State::Acting)) => State::Acting,
-                    (true, false, _) => State::Starting,
-                };
-                self.agents.insert(agent, Agent { state, since: now });
+                // A kiosk that comes back is a new kiosk: nothing carries over.
+                Some(State::Evicted) => {
+                    let state = if frozen {
+                        State::Waiting
+                    } else {
+                        State::Starting
+                    };
+                    self.set(id, state, now);
+                }
+                Some(_) => {}
+                None => {
+                    // Recovery never thaws or kills: a frozen kiosk stays
+                    // frozen, and the state file only says whether it was
+                    // parked.
+                    let state = match (populated, frozen, saved) {
+                        (false, _, _) => State::Evicted,
+                        (true, true, Some(State::Parked)) => State::Parked,
+                        (true, true, _) => State::Waiting,
+                        (true, false, Some(State::Acting)) => State::Acting,
+                        (true, false, _) => State::Starting,
+                    };
+                    let job = Job::None;
+                    self.version += 1;
+                    self.agents.insert(
+                        id,
+                        Agent {
+                            state,
+                            since: now,
+                            job,
+                            seq: 0,
+                        },
+                    );
+                    // A crash may have cut its reclaim short, and
+                    // reclaiming again is harmless.
+                    if state == State::Parked {
+                        self.queue_reclaim(id);
+                    }
+                }
+            },
+            Input::Gone { id } => {
+                self.queue.retain(|&q| q != id);
+                if let Some(a) = self.agents.remove(&id) {
+                    self.version += 1;
+                    if matches!(a.job, Job::Running | Job::Rerun) {
+                        self.running -= 1;
+                    }
+                }
             }
-            Event::Lost { agent } => self.set(&agent, State::Evicted, now),
-            Event::Acquire { agent } => {
-                let a = *self.agents.get(&agent).ok_or(Refusal::Unknown)?;
-                match a.state {
+            Input::Acquire { id } => {
+                let state = self.state(id).ok_or(Refusal::Unknown)?;
+                match state {
                     State::Evicted => return Err(Refusal::Evicted),
                     State::Acting => {}
-                    State::Starting => {
-                        out.push(Action::Weight(agent.clone(), self.cfg.weight_acting));
-                    }
+                    State::Starting => out.push((id, Effect::Weight(self.cfg.weight_acting))),
                     State::Waiting | State::Parked => {
-                        out.push(Action::Thaw(agent.clone()));
-                        out.push(Action::Weight(agent.clone(), self.cfg.weight_acting));
+                        self.issue(id, Effect::Thaw, out);
+                        out.push((id, Effect::Weight(self.cfg.weight_acting)));
                     }
                 }
-                self.set(&agent, State::Acting, now);
+                self.unpark(id);
+                self.set(id, State::Acting, now);
             }
-            Event::Release { agent } => {
-                let Some(a) = self.agents.get(&agent).copied() else {
-                    return Ok(out);
-                };
-                if matches!(a.state, State::Starting | State::Acting) {
-                    out.push(Action::Weight(agent.clone(), self.cfg.weight_idle));
-                    out.push(Action::Freeze(agent.clone()));
-                    self.set(&agent, State::Waiting, now);
+            Input::Release { id } => {
+                if matches!(self.state(id), Some(State::Starting | State::Acting)) {
+                    self.issue(id, Effect::Freeze, out);
+                    out.push((id, Effect::Weight(self.cfg.weight_idle)));
+                    self.set(id, State::Waiting, now);
                 }
             }
-            Event::Tick { mem_available } => {
-                let mut waiting: Vec<(Ms, String)> = self
+            Input::Tick { mem_available } => {
+                let mut waiting: Vec<(Ms, Id)> = self
                     .agents
                     .iter()
                     .filter(|(_, a)| a.state == State::Waiting)
-                    .map(|(n, a)| (a.since, n.clone()))
+                    .map(|(&id, a)| (a.since, id))
                     .collect();
                 waiting.sort();
-                let mut park: Vec<String> = waiting
-                    .iter()
-                    .filter(|(since, _)| now.saturating_sub(*since) >= self.cfg.park_after)
-                    .map(|(_, n)| n.clone())
-                    .collect();
-                if mem_available < self.cfg.mem_low {
-                    for (_, n) in waiting.iter().take(self.cfg.pressure_batch) {
-                        if !park.contains(n) {
-                            park.push(n.clone());
-                        }
+                let low = mem_available < self.cfg.mem_low;
+                for (i, (since, id)) in waiting.into_iter().enumerate() {
+                    let due = now.saturating_sub(since) >= self.cfg.park_after;
+                    if due || (low && i < self.cfg.pressure_batch) {
+                        self.set(id, State::Parked, now);
+                        self.queue_reclaim(id);
                     }
                 }
-                for n in park {
-                    out.push(Action::Park(n.clone()));
-                    self.set(&n, State::Parked, now);
+            }
+            Input::Reclaimed { id } => {
+                if let Some(a) = self.agents.get_mut(&id) {
+                    let rerun = match a.job {
+                        Job::Running => false,
+                        Job::Rerun => true,
+                        Job::None | Job::Queued => return Ok(()),
+                    };
+                    a.job = Job::None;
+                    self.running -= 1;
+                    if rerun {
+                        self.queue_reclaim(id);
+                    }
                 }
             }
+            Input::Failed { id, frozen, seq } => {
+                let Some(a) = self.agents.get(&id) else {
+                    return Ok(());
+                };
+                // A newer thaw or freeze is queued behind the failed one. It
+                // sets cgroup.freeze again, and reports its own failure.
+                if seq < a.seq {
+                    return Ok(());
+                }
+                let state = match (a.state, frozen) {
+                    (State::Waiting | State::Parked, false) => State::Acting,
+                    (State::Acting | State::Starting, true) => State::Waiting,
+                    (s, _) => s,
+                };
+                if state == State::Acting {
+                    self.unpark(id);
+                }
+                self.set(id, state, now);
+            }
         }
-        Ok(out)
+        Ok(())
     }
 
-    /// Drop an agent whose cgroup no longer exists.
-    pub fn forget(&mut self, agent: &str) {
-        self.agents.remove(agent);
+    /// Issue a thaw or freeze under the agent's next `seq`.
+    fn issue(&mut self, id: Id, effect: Effect, out: &mut Vec<(Id, Effect)>) {
+        if let Some(a) = self.agents.get_mut(&id) {
+            a.seq += 1;
+        }
+        out.push((id, effect));
     }
 
-    /// Correct the model after an action failed: the daemon reread the
-    /// kiosk and found it frozen or not.
-    pub fn observed(&mut self, agent: &str, frozen: bool, now: Ms) {
-        let Some(a) = self.agents.get(agent).copied() else {
+    fn set(&mut self, id: Id, state: State, now: Ms) {
+        if let Some(a) = self.agents.get_mut(&id)
+            && a.state != state
+        {
+            a.state = state;
+            a.since = now;
+            self.version += 1;
+        }
+    }
+
+    /// The agent was just parked: reclaim it once a slot is free.
+    fn queue_reclaim(&mut self, id: Id) {
+        let Some(a) = self.agents.get_mut(&id) else {
             return;
         };
-        let state = match (a.state, frozen) {
-            (State::Waiting | State::Parked, false) => State::Acting,
-            (State::Acting | State::Starting, true) => State::Waiting,
-            (s, _) => s,
+        match a.job {
+            Job::None => {
+                a.job = Job::Queued;
+                self.queue.push_back(id);
+            }
+            Job::Running => a.job = Job::Rerun,
+            Job::Queued | Job::Rerun => {}
+        }
+    }
+
+    /// The agent is no longer parked: drop its queued reclaim. A running
+    /// one ends on its own.
+    fn unpark(&mut self, id: Id) {
+        let Some(a) = self.agents.get_mut(&id) else {
+            return;
         };
-        self.set(agent, state, now);
+        match a.job {
+            Job::Queued => {
+                a.job = Job::None;
+                self.queue.retain(|&q| q != id);
+            }
+            Job::Rerun => a.job = Job::Running,
+            Job::None | Job::Running => {}
+        }
+    }
+
+    fn start_reclaims(&mut self, out: &mut Vec<(Id, Effect)>) {
+        while self.running < self.cfg.park_jobs {
+            let Some(id) = self.queue.pop_front() else {
+                break;
+            };
+            let a = self.agents.get_mut(&id).expect("queued agents exist");
+            a.job = Job::Running;
+            self.running += 1;
+            out.push((id, Effect::Park));
+        }
+    }
+
+    /// Assert the invariants.
+    pub fn check(&self) {
+        let running = self
+            .agents
+            .values()
+            .filter(|a| matches!(a.job, Job::Running | Job::Rerun))
+            .count();
+        assert_eq!(running, self.running as usize, "running count");
+        assert!(self.running <= self.cfg.park_jobs, "too many reclaims");
+        let queued = self
+            .agents
+            .values()
+            .filter(|a| a.job == Job::Queued)
+            .count();
+        assert_eq!(queued, self.queue.len(), "queue and jobs disagree");
+        for id in &self.queue {
+            let a = &self.agents[id];
+            assert_eq!(a.job, Job::Queued, "agent {id} queued twice or not at all");
+        }
+        for (id, a) in &self.agents {
+            if matches!(a.job, Job::Queued | Job::Rerun) {
+                assert_eq!(a.state, State::Parked, "agent {id} queued but not parked");
+            }
+        }
+        assert!(
+            self.queue.is_empty() || self.running == self.cfg.park_jobs,
+            "a reclaim waits while a slot is free"
+        );
     }
 }
 
@@ -264,6 +451,9 @@ mod tests {
     use super::*;
 
     const GIB: u64 = 1 << 30;
+    const A: Id = 1;
+    const B: Id = 2;
+    const C: Id = 3;
 
     fn policy() -> Policy {
         let mut p = Policy::new(Config {
@@ -272,10 +462,10 @@ mod tests {
             pressure_batch: 2,
             ..Config::default()
         });
-        for (i, name) in ["a", "b", "c"].iter().enumerate() {
-            p.handle(
-                Event::Found {
-                    agent: (*name).into(),
+        for (i, id) in [A, B, C].into_iter().enumerate() {
+            p.step(
+                Input::Found {
+                    id,
                     frozen: false,
                     populated: true,
                     saved: None,
@@ -287,161 +477,252 @@ mod tests {
         p
     }
 
-    fn state(p: &Policy, n: &str) -> State {
-        p.agents()[n].state
+    fn state(p: &Policy, id: Id) -> State {
+        p.state(id).unwrap()
     }
 
-    fn acq(p: &mut Policy, n: &str, now: Ms) -> Vec<Action> {
-        p.handle(Event::Acquire { agent: n.into() }, now).unwrap()
+    fn acq(p: &mut Policy, id: Id, now: Ms) -> Vec<(Id, Effect)> {
+        p.step(Input::Acquire { id }, now).unwrap()
     }
 
-    fn rel(p: &mut Policy, n: &str, now: Ms) -> Vec<Action> {
-        p.handle(Event::Release { agent: n.into() }, now).unwrap()
+    fn rel(p: &mut Policy, id: Id, now: Ms) -> Vec<(Id, Effect)> {
+        p.step(Input::Release { id }, now).unwrap()
     }
 
-    fn tick(p: &mut Policy, mem: u64, now: Ms) -> Vec<Action> {
-        p.handle(Event::Tick { mem_available: mem }, now).unwrap()
+    fn tick(p: &mut Policy, mem: u64, now: Ms) -> Vec<(Id, Effect)> {
+        p.step(Input::Tick { mem_available: mem }, now).unwrap()
+    }
+
+    fn reclaimed(p: &mut Policy, id: Id) -> Vec<(Id, Effect)> {
+        p.step(Input::Reclaimed { id }, 0).unwrap()
+    }
+
+    /// The agent's latest thaw or freeze failed, leaving cgroup.freeze asking
+    /// for `frozen`.
+    fn failed(p: &mut Policy, id: Id, frozen: bool, now: Ms) {
+        let seq = p.agents()[&id].seq;
+        p.step(Input::Failed { id, frozen, seq }, now).unwrap();
     }
 
     #[test]
     fn acquire_release_cycle() {
         let mut p = policy();
-        assert_eq!(
-            acq(&mut p, "a", 10),
-            vec![Action::Weight("a".into(), 10_000)]
-        );
-        assert_eq!(state(&p, "a"), State::Acting);
+        assert_eq!(acq(&mut p, A, 10), vec![(A, Effect::Weight(10_000))]);
+        assert_eq!(state(&p, A), State::Acting);
         // A second acquire while acting does nothing.
-        assert!(acq(&mut p, "a", 11).is_empty());
+        assert!(acq(&mut p, A, 11).is_empty());
+        // The freeze comes first, so a failed weight cannot skip it.
         assert_eq!(
-            rel(&mut p, "a", 20),
-            vec![Action::Weight("a".into(), 100), Action::Freeze("a".into())]
+            rel(&mut p, A, 20),
+            vec![(A, Effect::Freeze), (A, Effect::Weight(100))]
         );
-        assert_eq!(state(&p, "a"), State::Waiting);
+        assert_eq!(state(&p, A), State::Waiting);
         // Releasing again is idempotent.
-        assert!(rel(&mut p, "a", 21).is_empty());
+        assert!(rel(&mut p, A, 21).is_empty());
         assert_eq!(
-            acq(&mut p, "a", 30),
-            vec![Action::Thaw("a".into()), Action::Weight("a".into(), 10_000)]
+            acq(&mut p, A, 30),
+            vec![(A, Effect::Thaw), (A, Effect::Weight(10_000))]
         );
     }
 
     #[test]
     fn park_after_idle_timeout() {
         let mut p = policy();
-        rel(&mut p, "a", 100);
+        rel(&mut p, A, 100);
         assert!(tick(&mut p, 100 * GIB, 1_099).is_empty());
-        assert_eq!(
-            tick(&mut p, 100 * GIB, 1_100),
-            vec![Action::Park("a".into())]
-        );
-        assert_eq!(state(&p, "a"), State::Parked);
+        assert_eq!(tick(&mut p, 100 * GIB, 1_100), vec![(A, Effect::Park)]);
+        assert_eq!(state(&p, A), State::Parked);
         // Parked agents are not parked twice.
         assert!(tick(&mut p, 100 * GIB, 5_000).is_empty());
         // Acquire resumes a parked agent with a thaw.
         assert_eq!(
-            acq(&mut p, "a", 5_001),
-            vec![Action::Thaw("a".into()), Action::Weight("a".into(), 10_000)]
+            acq(&mut p, A, 5_001),
+            vec![(A, Effect::Thaw), (A, Effect::Weight(10_000))]
         );
     }
 
     #[test]
     fn memory_pressure_parks_longest_waiting_first() {
         let mut p = policy();
-        rel(&mut p, "c", 10);
-        rel(&mut p, "a", 20);
-        rel(&mut p, "b", 30);
+        rel(&mut p, C, 10);
+        rel(&mut p, A, 20);
+        rel(&mut p, B, 30);
         // Plenty of memory and nobody past park_after: nothing.
         assert!(tick(&mut p, 100 * GIB, 40).is_empty());
         // Low memory parks the batch of two, oldest first.
         assert_eq!(
             tick(&mut p, GIB, 50),
-            vec![Action::Park("c".into()), Action::Park("a".into())]
+            vec![(C, Effect::Park), (A, Effect::Park)]
         );
-        assert_eq!(state(&p, "b"), State::Waiting);
-        assert_eq!(tick(&mut p, GIB, 60), vec![Action::Park("b".into())]);
+        assert_eq!(state(&p, B), State::Waiting);
+        assert_eq!(tick(&mut p, GIB, 60), vec![(B, Effect::Park)]);
     }
 
     #[test]
-    fn no_memory_left_parks_early_and_never_kills() {
+    fn reclaims_wait_for_a_slot_first_come_first() {
         let mut p = policy();
-        rel(&mut p, "b", 10);
-        rel(&mut p, "a", 20);
-        tick(&mut p, 100 * GIB, 1_010);
-        tick(&mut p, 100 * GIB, 1_020);
-        rel(&mut p, "c", 1_030);
-        // With no memory left, the waiting agent is parked early and the
-        // parked ones stay parked.
-        assert_eq!(tick(&mut p, 0, 1_040), vec![Action::Park("c".into())]);
-        for n in ["a", "b", "c"] {
-            assert_eq!(state(&p, n), State::Parked);
-        }
-        assert_eq!(
-            acq(&mut p, "a", 1_050),
-            vec![Action::Thaw("a".into()), Action::Weight("a".into(), 10_000)]
-        );
+        p.cfg.park_jobs = 1;
+        rel(&mut p, B, 10);
+        rel(&mut p, A, 20);
+        // Both are parked; only the first reclaims.
+        assert_eq!(tick(&mut p, 100 * GIB, 2_000), vec![(B, Effect::Park)]);
+        assert_eq!(state(&p, A), State::Parked);
+        // The next starts as soon as the first ends.
+        assert_eq!(reclaimed(&mut p, B), vec![(A, Effect::Park)]);
+        // A stray report changes nothing.
+        assert!(reclaimed(&mut p, B).is_empty());
+    }
+
+    #[test]
+    fn an_agent_parked_again_mid_reclaim_is_reclaimed_again() {
+        let mut p = policy();
+        rel(&mut p, A, 0);
+        assert_eq!(tick(&mut p, 100 * GIB, 1_000), vec![(A, Effect::Park)]);
+        // The acquire stops that reclaim, which has not reported yet.
+        acq(&mut p, A, 1_001);
+        rel(&mut p, A, 1_002);
+        assert!(tick(&mut p, 100 * GIB, 2_002).is_empty());
+        assert_eq!(state(&p, A), State::Parked);
+        assert_eq!(reclaimed(&mut p, A), vec![(A, Effect::Park)]);
     }
 
     #[test]
     fn acting_and_starting_agents_are_never_parked() {
         let mut p = policy();
-        acq(&mut p, "a", 0);
+        acq(&mut p, A, 0);
         assert!(tick(&mut p, 0, 1_000_000).is_empty());
-        assert_eq!(state(&p, "a"), State::Acting);
-        assert_eq!(state(&p, "b"), State::Starting);
+        assert_eq!(state(&p, A), State::Acting);
+        assert_eq!(state(&p, B), State::Starting);
     }
 
     #[test]
     fn evicted_agents_refuse_acquire() {
         let mut p = policy();
-        p.handle(Event::Lost { agent: "a".into() }, 5).unwrap();
-        assert_eq!(
-            p.handle(Event::Acquire { agent: "a".into() }, 6),
-            Err(Refusal::Evicted)
-        );
-        assert_eq!(
-            p.handle(Event::Acquire { agent: "zz".into() }, 6),
-            Err(Refusal::Unknown)
-        );
+        let empty = Input::Found {
+            id: A,
+            frozen: false,
+            populated: false,
+            saved: None,
+        };
+        p.step(empty, 5).unwrap();
+        assert_eq!(p.step(Input::Acquire { id: A }, 6), Err(Refusal::Evicted));
+        assert_eq!(p.step(Input::Acquire { id: 99 }, 6), Err(Refusal::Unknown));
+    }
+
+    #[test]
+    fn discovery_follows_a_kiosk_that_empties_and_restarts() {
+        let mut p = policy();
+        let found = |frozen, populated| Input::Found {
+            id: A,
+            frozen,
+            populated,
+            saved: None,
+        };
+        // Finding a running kiosk again changes nothing.
+        acq(&mut p, A, 1);
+        p.step(found(false, true), 2).unwrap();
+        assert_eq!(state(&p, A), State::Acting);
+        p.step(found(false, false), 3).unwrap();
+        assert_eq!(state(&p, A), State::Evicted);
+        // It comes back frozen: a new kiosk that waits for its first acquire.
+        p.step(found(true, true), 4).unwrap();
+        assert_eq!(state(&p, A), State::Waiting);
+        assert_eq!(acq(&mut p, A, 5)[0], (A, Effect::Thaw));
+        p.step(found(false, false), 6).unwrap();
+        assert_eq!(state(&p, A), State::Evicted);
+        // It comes back running: a new start.
+        p.step(found(false, true), 7).unwrap();
+        assert_eq!(state(&p, A), State::Starting);
     }
 
     #[test]
     fn recovery_keeps_frozen_kiosks_frozen() {
         let mut p = Policy::new(Config::default());
-        let found = |agent: &str, frozen, populated, saved| Event::Found {
-            agent: agent.into(),
+        let found = |id, frozen, populated, saved| Input::Found {
+            id,
             frozen,
             populated,
             saved,
         };
-        for ev in [
-            found("parked", true, true, Some(State::Parked)),
-            found("waiting", true, true, Some(State::Waiting)),
-            found("nosave", true, true, None),
-            found("acting", false, true, Some(State::Acting)),
-            found("stale", false, true, Some(State::Parked)),
-            found("gone", false, false, Some(State::Acting)),
+        let mut effects = Vec::new();
+        for input in [
+            found(1, true, true, Some(State::Parked)),
+            found(2, true, true, Some(State::Waiting)),
+            found(3, true, true, None),
+            found(4, false, true, Some(State::Acting)),
+            found(5, false, true, Some(State::Parked)),
+            found(6, false, false, Some(State::Acting)),
         ] {
-            // Recovery emits no actions: nothing is thawed or killed.
-            assert!(p.handle(ev, 0).unwrap().is_empty());
+            effects.extend(p.step(input, 0).unwrap());
         }
-        assert_eq!(state(&p, "parked"), State::Parked);
-        assert_eq!(state(&p, "waiting"), State::Waiting);
-        assert_eq!(state(&p, "nosave"), State::Waiting);
-        assert_eq!(state(&p, "acting"), State::Acting);
+        // Nothing is thawed or killed; the parked kiosk is reclaimed again.
+        assert_eq!(effects, vec![(1, Effect::Park)]);
+        assert_eq!(state(&p, 1), State::Parked);
+        assert_eq!(state(&p, 2), State::Waiting);
+        assert_eq!(state(&p, 3), State::Waiting);
+        assert_eq!(state(&p, 4), State::Acting);
         // A kiosk saved as parked but found thawed was thawed by someone
         // else; trust the kernel.
-        assert_eq!(state(&p, "stale"), State::Starting);
-        assert_eq!(state(&p, "gone"), State::Evicted);
+        assert_eq!(state(&p, 5), State::Starting);
+        assert_eq!(state(&p, 6), State::Evicted);
     }
 
     #[test]
-    fn observed_corrects_failed_actions() {
+    fn a_failure_is_corrected_from_what_cgroup_freeze_asks_for() {
         let mut p = policy();
-        rel(&mut p, "a", 0);
-        // The freeze failed: the kernel says it is thawed.
-        p.observed("a", false, 1);
-        assert_eq!(state(&p, "a"), State::Acting);
+        rel(&mut p, A, 0);
+        // The freeze write failed: cgroup.freeze still asks for thawed.
+        failed(&mut p, A, false, 1);
+        assert_eq!(state(&p, A), State::Acting);
+        // The thaw timed out after its write: thawed is what it asks for.
+        rel(&mut p, A, 2);
+        acq(&mut p, A, 3);
+        failed(&mut p, A, false, 4);
+        assert_eq!(state(&p, A), State::Acting);
+        // The freeze timed out after its write: the kernel may still
+        // finish it, so the next acquire must thaw.
+        acq(&mut p, B, 5);
+        rel(&mut p, B, 6);
+        failed(&mut p, B, true, 7);
+        assert_eq!(state(&p, B), State::Waiting);
+        // The thaw's write failed: cgroup.freeze still asks for frozen.
+        assert_eq!(acq(&mut p, B, 8)[0], (B, Effect::Thaw));
+        failed(&mut p, B, true, 9);
+        assert_eq!(state(&p, B), State::Waiting);
+        assert_eq!(acq(&mut p, B, 10)[0], (B, Effect::Thaw));
+    }
+
+    #[test]
+    fn a_failure_behind_newer_work_changes_nothing() {
+        let mut p = policy();
+        // A freeze times out while an acquire's thaw waits behind it.
+        rel(&mut p, A, 0);
+        let seq = p.agents()[&A].seq;
+        acq(&mut p, A, 1);
+        let frozen = true;
+        p.step(Input::Failed { id: A, frozen, seq }, 2).unwrap();
+        assert_eq!(state(&p, A), State::Acting);
+        assert_eq!(rel(&mut p, A, 3)[0], (A, Effect::Freeze));
+        // A thaw times out while a release's freeze waits behind it.
+        acq(&mut p, A, 4);
+        let seq = p.agents()[&A].seq;
+        rel(&mut p, A, 5);
+        let frozen = false;
+        p.step(Input::Failed { id: A, frozen, seq }, 6).unwrap();
+        assert_eq!(state(&p, A), State::Waiting);
+        assert_eq!(acq(&mut p, A, 7)[0], (A, Effect::Thaw));
+    }
+
+    #[test]
+    fn a_failure_behind_a_repeated_release_still_corrects() {
+        let mut p = policy();
+        rel(&mut p, A, 0);
+        let seq = p.agents()[&A].seq;
+        // Nothing to do, so nothing that sets cgroup.freeze again.
+        assert!(rel(&mut p, A, 1).is_empty());
+        let frozen = false;
+        p.step(Input::Failed { id: A, frozen, seq }, 2).unwrap();
+        assert_eq!(state(&p, A), State::Acting);
     }
 
     #[test]
@@ -455,5 +736,202 @@ mod tests {
         ] {
             assert_eq!(State::from_name(s.name()), Some(s));
         }
+    }
+
+    /// The kernel side of one agent, as the effects leave it.
+    #[derive(Debug, Clone, Copy, Default)]
+    struct Kiosk {
+        exists: bool,
+        populated: bool,
+        /// What cgroup.freeze asks for.
+        frozen: bool,
+        /// A Park started since the agent last entered Parked.
+        reclaimed: bool,
+    }
+
+    /// Every sequence of up to 6 inputs in a world of 2 agents and 1
+    /// reclaim slot, where memory is always low and no wait reaches
+    /// park_after. After each step: the policy's state agrees with what
+    /// its effects asked cgroup.freeze for, every parked agent is reclaimed
+    /// or has a reclaim coming, and acquire refuses only unknown and
+    /// evicted agents. Agent 1 also exits, restarts, and loses and regains
+    /// its cgroup; agent 2 only acts and waits. Effects reach the kiosk as
+    /// they are issued, so a failure of any but the latest thaw or freeze
+    /// finds cgroup.freeze already set by the newer one.
+    #[test]
+    fn exhaustive_up_to_6_inputs() {
+        const IDS: [Id; 2] = [1, 2];
+
+        fn inputs(p: &Policy, k: &[Kiosk; 2]) -> Vec<Input> {
+            let mut v = Vec::new();
+            for id in IDS {
+                v.push(Input::Acquire { id });
+                v.push(Input::Release { id });
+                v.push(Input::Reclaimed { id });
+            }
+            v.push(Input::Tick { mem_available: 0 });
+            let seq = p.agents().get(&1).map_or(0, |a| a.seq);
+            for frozen in [false, true] {
+                v.push(Input::Failed { id: 1, frozen, seq });
+                if seq > 0 {
+                    let seq = seq - 1;
+                    v.push(Input::Failed { id: 1, frozen, seq });
+                }
+            }
+            let one = k[0];
+            if one.exists && one.populated {
+                v.push(Input::Found {
+                    id: 1,
+                    frozen: false,
+                    populated: false,
+                    saved: None,
+                });
+            }
+            if one.exists && !one.populated {
+                for frozen in [false, true] {
+                    v.push(Input::Found {
+                        id: 1,
+                        frozen,
+                        populated: true,
+                        saved: None,
+                    });
+                }
+            }
+            if one.exists {
+                v.push(Input::Gone { id: 1 });
+            } else {
+                v.push(Input::Found {
+                    id: 1,
+                    frozen: false,
+                    populated: true,
+                    saved: None,
+                });
+            }
+            v
+        }
+
+        fn walk(p: &Policy, k: &[Kiosk; 2], depth: u32, now: Ms) {
+            for (i, id) in IDS.into_iter().enumerate() {
+                let kiosk = k[i];
+                let Some(a) = p.agents().get(&id) else {
+                    assert!(!kiosk.exists, "agent {id} forgotten while it exists");
+                    continue;
+                };
+                assert!(kiosk.exists, "agent {id} known after its cgroup went");
+                match a.state {
+                    State::Starting | State::Acting => {
+                        assert!(!kiosk.frozen, "agent {id} acts on a frozen kiosk");
+                    }
+                    State::Waiting => assert!(kiosk.frozen, "agent {id} waits thawed"),
+                    State::Parked => {
+                        assert!(kiosk.frozen, "agent {id} parked thawed");
+                        assert!(
+                            kiosk.reclaimed || matches!(a.job, Job::Queued | Job::Rerun),
+                            "agent {id} parked with no reclaim coming"
+                        );
+                    }
+                    State::Evicted => assert!(!kiosk.populated, "agent {id} evicted but running"),
+                }
+            }
+            if depth == 0 {
+                return;
+            }
+            for input in inputs(p, k) {
+                let (mut p2, mut k2) = (p.clone(), *k);
+                let slot = |id: Id| (id - 1) as usize;
+                // The world changes first; the input reports it.
+                match input {
+                    Input::Found {
+                        id,
+                        populated: false,
+                        ..
+                    } => k2[slot(id)].populated = false,
+                    Input::Found { id, frozen, .. } => {
+                        let kiosk = &mut k2[slot(id)];
+                        *kiosk = Kiosk {
+                            exists: true,
+                            populated: true,
+                            frozen,
+                            ..Kiosk::default()
+                        };
+                    }
+                    Input::Gone { id } => k2[slot(id)] = Kiosk::default(),
+                    Input::Failed { id, frozen, seq }
+                        if p.agents().get(&id).is_none_or(|a| a.seq == seq) =>
+                    {
+                        k2[slot(id)].frozen = frozen;
+                    }
+                    _ => {}
+                }
+                let before = p2.state(match input {
+                    Input::Acquire { id } => id,
+                    _ => 0,
+                });
+                match p2.step(input.clone(), now) {
+                    Ok(effects) => {
+                        if let Input::Acquire { id } = input {
+                            assert_eq!(p2.state(id), Some(State::Acting));
+                        }
+                        for (id, e) in effects {
+                            let kiosk = &mut k2[slot(id)];
+                            assert!(kiosk.exists, "effect {e:?} on gone agent {id}");
+                            match e {
+                                Effect::Thaw => kiosk.frozen = false,
+                                Effect::Freeze => kiosk.frozen = true,
+                                Effect::Park => {
+                                    assert!(kiosk.frozen, "reclaim of thawed agent {id}");
+                                    kiosk.reclaimed = true;
+                                }
+                                Effect::Weight(_) => {}
+                            }
+                        }
+                    }
+                    Err(r) => {
+                        let want = match before {
+                            None => Refusal::Unknown,
+                            Some(State::Evicted) => Refusal::Evicted,
+                            Some(s) => panic!("acquire refused in {s:?}"),
+                        };
+                        assert_eq!(r, want);
+                    }
+                }
+                // Entering Parked needs a reclaim started after it.
+                for id in IDS {
+                    if p2.state(id) == Some(State::Parked) && p.state(id) != Some(State::Parked) {
+                        let started = matches!(p2.agents()[&id].job, Job::Running)
+                            && p.agents().get(&id).is_none_or(|a| a.job != Job::Running);
+                        k2[slot(id)].reclaimed = started;
+                    }
+                }
+                walk(&p2, &k2, depth - 1, now + 1);
+            }
+        }
+
+        let mut p = Policy::new(Config {
+            park_after: Ms::MAX,
+            mem_low: 1,
+            pressure_batch: 1,
+            park_jobs: 1,
+            ..Config::default()
+        });
+        let mut k = [Kiosk::default(); 2];
+        for id in IDS {
+            p.step(
+                Input::Found {
+                    id,
+                    frozen: false,
+                    populated: true,
+                    saved: None,
+                },
+                0,
+            )
+            .unwrap();
+            k[(id - 1) as usize] = Kiosk {
+                exists: true,
+                populated: true,
+                ..Kiosk::default()
+            };
+        }
+        walk(&p, &k, 6, 1);
     }
 }
