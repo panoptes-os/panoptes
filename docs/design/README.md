@@ -16,6 +16,7 @@ Wayland ([decisions.md](decisions.md)).
 | [verification.md](verification.md) | How to write a subsystem so that its checks can prove it | Split it into a pure policy, threads, and I/O. Check the policy exhaustively, the threads with loom, and the I/O in NixOS VMs |
 | [verification-rationale.md](verification-rationale.md) | Why each verification rule exists | The fact each rule rests on, with its date; the tools left out; what would change the rules |
 | [measurements.md](measurements.md) | How each number was taken | Machine, versions, methods, caveats |
+| [panel-mock/](panel-mock/README.md) | What `panoptes top` becomes | A control panel called Panoptes System, in its own Ghostty window: a mock, its rules, and a build order |
 
 ## Since 2026-10-31, the harness is the cost
 
