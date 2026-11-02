@@ -216,3 +216,48 @@ fn weights_round_trip() {
     assert!(cg.set_cpu_weight(0).is_err());
     assert!(base().controllers().unwrap().iter().any(|c| c == "memory"));
 }
+
+/// Rust ignores SIGPIPE in every program, this test binary included, and
+/// both ignored signals and the signal mask survive execve. The child must
+/// start with neither, as `std::process::Command` gives it.
+#[test]
+#[ignore = "needs root in a delegated cgroup; see tests/run-root.sh"]
+fn a_child_starts_with_default_signals() {
+    use std::io::Read;
+    use std::os::fd::AsFd;
+
+    let cg = TestGroup::new("t-signals");
+    // SAFETY: sigset_t is plain data that sigemptyset initializes, and
+    // pthread_sigmask changes only this thread's mask; it is restored
+    // below.
+    let old = unsafe {
+        let mut usr1: libc::sigset_t = std::mem::zeroed();
+        let mut old: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut usr1);
+        libc::sigaddset(&mut usr1, libc::SIGUSR1);
+        assert_eq!(libc::pthread_sigmask(libc::SIG_BLOCK, &usr1, &mut old), 0);
+        old
+    };
+    let (mut out, w) = std::io::pipe().unwrap();
+    let child = cg.spawn_with_fds(&["cat", "/proc/self/status"], &[], &[(w.as_fd(), 1)]);
+    // SAFETY: `old` is the mask pthread_sigmask returned above.
+    unsafe {
+        assert_eq!(
+            libc::pthread_sigmask(libc::SIG_SETMASK, &old, std::ptr::null_mut()),
+            0
+        );
+    }
+    let child = child.unwrap();
+    drop(w);
+    let mut status = String::new();
+    out.read_to_string(&mut status).unwrap();
+    assert_eq!(child.wait().unwrap(), 0);
+
+    let mask = |key: &str| {
+        let hex = status.lines().find_map(|l| l.strip_prefix(key)).unwrap();
+        u64::from_str_radix(hex.trim(), 16).unwrap()
+    };
+    let pipe = 1 << (libc::SIGPIPE - 1);
+    assert_eq!(mask("SigBlk:"), 0, "the child inherited a signal mask");
+    assert_eq!(mask("SigIgn:") & pipe, 0, "the child ignores SIGPIPE");
+}

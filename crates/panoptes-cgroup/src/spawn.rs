@@ -150,6 +150,13 @@ pub(crate) fn spawn_into(
     let mut env_ptrs: Vec<*const libc::c_char> = vars.iter().map(|v| v.as_ptr()).collect();
     env_ptrs.push(std::ptr::null());
 
+    // SAFETY: sigset_t is plain data, and sigemptyset initializes it.
+    let no_signals = unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        set
+    };
+
     let dir = File::open(cgroup).map_err(|e| Error::io(cgroup, e))?;
     let mut pidfd: libc::c_int = -1;
     let clone_args = CloneArgs {
@@ -162,9 +169,9 @@ pub(crate) fn spawn_into(
 
     // SAFETY: clone3 without a new stack behaves like fork(2): the child
     // runs on a copy of this thread's stack. Everything the child touches
-    // (path, arg and env pointer arrays) was allocated before the call, and
-    // the child only calls fcntl, dup2, execve, and _exit, all
-    // async-signal-safe.
+    // (path, arg and env pointer arrays, the signal set) was set up before
+    // the call, and the child only calls sigprocmask, signal, fcntl, dup2,
+    // execve, and _exit, all async-signal-safe.
     let ret = unsafe {
         libc::syscall(
             libc::SYS_clone3,
@@ -173,11 +180,19 @@ pub(crate) fn spawn_into(
         )
     };
     if ret == 0 {
-        // SAFETY: in the child; see above. fcntl and dup2 are
-        // async-signal-safe. Each source is first copied above every target,
-        // so a source that already sits on another entry's target survives,
-        // and dup2 then clears close-on-exec on the target only.
+        // SAFETY: in the child; see above. Each source is first copied
+        // above every target, so a source that already sits on another
+        // entry's target survives, and dup2 then clears close-on-exec on the
+        // target only.
         unsafe {
+            // The mask and ignored signals survive execve, and Rust ignores
+            // SIGPIPE; start the program without either, as
+            // std::process::Command does.
+            if libc::sigprocmask(libc::SIG_SETMASK, &no_signals, std::ptr::null_mut()) != 0
+                || libc::signal(libc::SIGPIPE, libc::SIG_DFL) == libc::SIG_ERR
+            {
+                libc::_exit(126);
+            }
             let mut moved = [-1 as RawFd; 8];
             if fds.len() > moved.len() {
                 libc::_exit(126);
