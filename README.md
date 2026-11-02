@@ -103,13 +103,15 @@ to end. Run one with `nix build -L .#checks.x86_64-linux.NAME`:
 | `desk` | panoptes-desk under systemd in a NixOS VM, driving wev, xev and Tk over MCP |
 | `resd` | panoptes-resd in a NixOS VM with zswap on: a kiosk cgroup frozen, parked, woken, kept frozen across a restart, evicted and forgotten |
 | `cgroup` | The cgroup tests that need root, in a NixOS VM with zswap on |
+| `desk-resd` | The desk with `--resd`: wev's kiosk frozen between calls, parked after a wait, woken by the next click, and thawed by the desk once resd is gone |
 
-All but `desk`, `resd` and `cgroup` run in the build sandbox. Those need
-a VM, because the sandbox has no cgroupfs, so Nix builds them only on a
-builder with the `kvm` system feature. Each takes under 30 s with working
-KVM. If the builder has the feature but no usable `/dev/kvm`, QEMU emulates
-the VM, and the checks' timeouts allow for that. In a git checkout, flakes
-see only tracked files: add new files, or build `path:.#checks...`.
+All but `desk`, `resd`, `cgroup` and `desk-resd` run in the build
+sandbox. Those need a VM, because the sandbox has no cgroupfs, so Nix
+builds them only on a builder with the `kvm` system feature. Each takes
+under 30 s with working KVM. If the builder has the feature but no usable
+`/dev/kvm`, QEMU emulates the VM, and the checks' timeouts allow for that.
+In a git checkout, flakes see only tracked files: add new files, or build
+`path:.#checks...`.
 
 Cage is [panoptes-os/cage](https://github.com/panoptes-os/cage), branch
 `panoptes`, pinned as the flake input `cage-src`. To check a local Cage
