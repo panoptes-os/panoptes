@@ -23,5 +23,12 @@ wayland-protocols-misc = { version = "0.3", features = ["client"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 wayland-scanner = "0.31"
 
+# The layers, as docs/design/verification.md defines them. nix/rules/
+# checks what the policy files may name, and runs cargo-mutants on the
+# lines a pull request changes in both lists.
+[package.metadata.panoptes]
+policy = ["src/lease.rs", "src/settle.rs", "src/windows.rs", "src/keymap.rs"]
+threads = ["src/owner.rs", "src/handoff.rs"]
+
 [lints]
 workspace = true

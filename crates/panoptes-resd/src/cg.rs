@@ -150,6 +150,13 @@ impl Kiosk {
 impl worker::Kiosk for Kiosk {
     fn apply(&mut self, effect: Effect) -> Result<f64, String> {
         let cg = self.cg()?;
+        #[cfg_attr(
+            panoptes_loom,
+            expect(
+                clippy::disallowed_methods,
+                reason = "times the effect for the log, in fractions of a ms"
+            )
+        )]
         let start = Instant::now();
         match effect {
             Effect::Thaw => cg
@@ -181,8 +188,16 @@ impl worker::Kiosk for Kiosk {
         cg.set_zswap_writeback(false)
             .map_err(|e| format!("memory.zswap.writeback: {e}"))?;
         let before = cg.memory_current().map_err(|e| e.to_string())?;
+        #[cfg_attr(
+            panoptes_loom,
+            expect(
+                clippy::disallowed_methods,
+                reason = "times the park for the log, in fractions of a ms"
+            )
+        )]
+        let start = Instant::now();
         self.park = Some(Parking {
-            start: Instant::now(),
+            start,
             before,
             asked: 0,
         });

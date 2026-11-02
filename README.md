@@ -96,6 +96,7 @@ to end. Run one with `nix build -L .#checks.x86_64-linux.NAME`:
 |---|---|
 | `unit` | Every crate's tests, except the cgroup tests that need root |
 | `loom` | The loom models, with panoptes-sync swapped to loom; see [verification.md](docs/design/verification.md) |
+| `rules` | Policy files name no I/O, clock, thread or other crate, and the two copies of the rules agree; see [verification.md](docs/design/verification.md) |
 | `cage-size` | The fork with no client: the screen is 1024x768, and a malformed size is refused |
 | `cage-windows` | foot, xeyes and a Tk dialog, listed, focused and closed through the fork's window protocol; then Cage exits cleanly |
 | `cage-windows-asan` | The same, with the fork built under ASan and UBSan: no memory error, leak or undefined behavior |

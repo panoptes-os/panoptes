@@ -24,8 +24,15 @@ use std::os::fd::AsFd;
 use std::os::unix::fs::FileExt;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
+#[cfg_attr(
+    panoptes_loom,
+    expect(
+        clippy::disallowed_types,
+        reason = "a proxy's user data must be Sync; no model runs this file"
+    )
+)]
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use wayland_client::globals::{BindError, GlobalListContents, registry_queue_init};
 use wayland_client::protocol::{
     wl_buffer, wl_callback, wl_output, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,
@@ -64,14 +71,21 @@ pub struct Wl {
     pointer: pointer::ZwlrVirtualPointerV1,
     keyboard: keyboard::ZwpVirtualKeyboardV1,
     shared: Arc<Shared<window::PanoptesWindowV1>>,
-    /// Zero for input event timestamps.
-    epoch: Instant,
 }
 
 /// A window proxy's desk number, set when the manager announces it. The
 /// compositor's object ids are reused after a window closes; these are not.
 #[derive(Debug, Default)]
-struct WindowId(OnceLock<u32>);
+struct WindowId(
+    #[cfg_attr(
+        panoptes_loom,
+        expect(
+            clippy::disallowed_types,
+            reason = "a proxy's user data must be Sync; no model runs this file"
+        )
+    )]
+    OnceLock<u32>,
+);
 
 fn window_id(w: &window::PanoptesWindowV1) -> Option<u32> {
     w.data::<WindowId>()?.0.get().copied()
@@ -157,7 +171,6 @@ impl Wl {
             pointer,
             keyboard,
             shared,
-            epoch: Instant::now(),
         })
     }
 
@@ -238,8 +251,9 @@ impl Wl {
     // Input requests queue until the caller flushes, so one action's events
     // reach the compositor together.
 
+    /// Input event timestamps: ms since an arbitrary start.
     fn time(&self) -> u32 {
-        self.epoch.elapsed().as_millis() as u32
+        sync::now() as u32
     }
 
     /// Move the pointer to output pixel (x, y).

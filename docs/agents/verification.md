@@ -118,9 +118,9 @@ On 2026-11-01, with Aeneas ab34bd28 and Charon 0.1.304:
 
 - A policy with only enums, structs, `Option` and integer arithmetic
   translated with no changes, and the Lean type-checked.
-- A closure passed to `filter`, `map` or `any` stopped the translation with
-  an internal error, and `slice::Iter::find` crashed it. The same loops
-  written with an index translated.
+- A closure passed to `filter` or `any` stopped the translation with an
+  internal error, and `slice::Iter::find` crashed it. The same loops written
+  with an index translated.
 - The Lean library models `Vec`, slices, arrays, `Option`, `Result`, ranges
   and a few iterator adapters. It does not model `BTreeMap`, `HashMap` or
   `VecDeque`. Each item it does not model becomes an axiom, and you write
@@ -137,9 +137,10 @@ On 2026-11-01, with Aeneas ab34bd28 and Charon 0.1.304:
 3. Put threads, channels, locks and atomics only in the threads layer.
    Import them from `panoptes_sync`, not from `std`. In a normal build
    `panoptes_sync` re-exports `std`. With `--cfg panoptes_loom` it
-   re-exports loom, except for channels: loom 0.7's channel never
-   disconnects, so an owner that ends when its senders go would hang a
-   model. The facade's own loom channel keeps std's rules.
+   re-exports loom, except for `sync::scope`, which loom does not model, and
+   for channels: loom 0.7's channel never disconnects, so an owner that ends
+   when its senders go would hang a model. The facade's own loom channel
+   keeps std's rules.
 4. Do not decide anything from an atomic. Send the owner a message. Use
    atomics only for counters that nothing decides from, such as statistics.
 5. Hold a lock only to copy or update its data. Do not hold it across I/O,
@@ -203,19 +204,49 @@ tokio runs only where a network library needs it.
    block. Reply on a `tokio::sync::oneshot`, whose `send` does not block
    either and whose receiver the edge task can await.
 
+## CI checks the rules that a tool can check
+
+| Rules | What fails the check | Check |
+|---|---|---|
+| Policy 2, 3 | A policy file that names I/O, a print macro, the clock, a thread, a lock, an atomic, shared or interior-mutable state, `unsafe`, a closure or trait object argument, `async`, or another crate's path, or that imports more than std's collections and plain-data modules | `rules` nix check: `nix/rules/policy.sh` |
+| Policy 7; threads 12, 13 | A mutant that cargo-mutants plants on a policy or threads line that the pull request changes, and that no test catches (policy), or that neither the crate's tests nor its loom models catch (threads) | CI `check-mutants`: `nix/rules/mutants.sh` |
+| Threads 2, 3, 8, 9; tokio 2 | std's threads, sleep, locks, channels, atomics or clock named outside panoptes-sync, or a multi-threaded tokio runtime. `std::thread::scope` passes: `sync::scope` is the same item, and clippy cannot tell them apart | CI `check-rust`: clippy under `--cfg panoptes_loom`, with `nix/rules/clippy.toml` |
+| Threads 13 | A crate that uses panoptes-sync and runs no loom model | `loom` nix check: `nix/rules/loom-count.sh` |
+| I/O 4 | `unsafe` in a module that does not allow `unsafe_code`, or an unsafe block with no `// SAFETY:` comment | The workspace lints `unsafe_code` and `undocumented_unsafe_blocks` |
+| I/O 5 | A sanitizer report, or an exit code other than 0, in the Cage fork's scenario | `cage-windows-asan` nix check |
+| Every rule | The two copies of the rules, here and in `docs/agents/`, numbered differently | `rules` nix check: `nix/rules/rule-copies.sh` |
+
+Review checks the other rules.
+
 ## Commands
 
 | Check | Command |
 |---|---|
 | Policy tests | `cargo test -p CRATE`; every crate: `nix build -L .#checks.x86_64-linux.unit` |
-| loom models | `RUSTFLAGS="--cfg panoptes_loom" cargo test --release -p CRATE -- loom_models`; every crate: `nix build -L .#checks.x86_64-linux.loom` |
+| loom models | `RUSTFLAGS="--cfg panoptes_loom" CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true cargo test --release -p CRATE -- loom_models`; every crate: `nix build -L .#checks.x86_64-linux.loom` |
 | VM checks | `nix build -L .#checks.x86_64-linux.NAME`; see the [README](../../README.md#build-and-check) |
 | Aeneas | `charon cargo --preset=aeneas`, then `aeneas -backend lean -split-files FILE.llbc` |
+| Rule scripts | `nix build -L .#checks.x86_64-linux.rules` |
+| Deny-list | `CLIPPY_CONF_DIR=$PWD/nix/rules RUSTFLAGS="--cfg panoptes_loom" cargo clippy --workspace --lib --bins -- -D warnings` |
+| Mutants | `bash nix/rules/mutants.sh DIFF`, where DIFF is a unified diff of the change |
 
 Put a crate's loom models in a module named `loom_models`, gated with
 `#[cfg(all(test, panoptes_loom))]`, and call `panoptes_sync::model` so
 that loom stays one crate's dependency. Gate every other test that uses
 `panoptes_sync` with `#[cfg(not(panoptes_loom))]`.
+
+List each crate's policy files and threads files in its `Cargo.toml`, as
+`policy = [...]` and `threads = [...]` under `[package.metadata.panoptes]`.
+The rule scripts and cargo-mutants read those lists.
+
+The deny-list runs only under `--cfg panoptes_loom`. In a normal build
+panoptes-sync re-exports std, so clippy would flag the facade's own types
+as std's. Where code outside panoptes-sync must name std's clock or
+threads, waive the lint on that statement, with the reason:
+`#[cfg_attr(panoptes_loom, expect(clippy::disallowed_methods, reason = "..."))]`.
+The `cfg_attr` keeps the plain build quiet; `expect` fails the loom pass
+once the waiver has nothing to waive. A crate that is not split yet allows
+the deny-list at its root.
 
 loom's own docs use `--cfg loom`. Panoptes cannot: tokio drops its `net`
 module under that cfg (tokio 1.54.1, `src/net/mod.rs:1`). On 2026-10-31,

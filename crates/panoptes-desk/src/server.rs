@@ -210,6 +210,13 @@ async fn handle_line(handle: &Handle, line: &str) -> Value {
         return json!({ "id": id, "ok": true, "result": list });
     }
     let args = req.get("args").cloned().unwrap_or_else(|| json!({}));
+    #[cfg_attr(
+        panoptes_loom,
+        expect(
+            clippy::disallowed_methods,
+            reason = "times the call for its reply, in fractions of a ms"
+        )
+    )]
     let start = Instant::now();
     match handle.call(tool, args).await {
         Ok(out) => reply(id, out, start),
@@ -306,6 +313,13 @@ impl ServerHandler for DeskMcp {
                 .arguments
                 .map(Value::Object)
                 .unwrap_or_else(|| json!({}));
+            #[cfg_attr(
+                panoptes_loom,
+                expect(
+                    clippy::disallowed_methods,
+                    reason = "times the call for its reply, in fractions of a ms"
+                )
+            )]
             let start = Instant::now();
             let result = match handle.call(&request.name, args).await {
                 Ok(out) => {

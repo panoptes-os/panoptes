@@ -12,6 +12,15 @@
 //! `--delay-ms` holds every reply before its first token, standing in for
 //! a model's time to first token.
 
+// Not split into policy, threads and I/O yet, so the verification rules'
+// deny-list (nix/rules/clippy.toml) does not apply; see
+// docs/design/verification.md.
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    clippy::disallowed_macros
+)]
+
 mod flow;
 mod tree;
 

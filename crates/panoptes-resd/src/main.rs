@@ -17,6 +17,8 @@
 mod cg;
 mod conn;
 mod owner;
+// SO_PEERCRED: the crate's only unsafe code.
+#[allow(unsafe_code)]
 mod peercred;
 mod policy;
 mod worker;
@@ -150,6 +152,13 @@ fn main() {
     let ticks = tx.clone();
     sync::spawn("tick", move || {
         loop {
+            #[cfg_attr(
+                panoptes_loom,
+                expect(
+                    clippy::disallowed_methods,
+                    reason = "paces the tick messages; the policy reads time only from them"
+                )
+            )]
             std::thread::sleep(args.tick);
             if ticks.send(Msg::Tick).is_err() {
                 return;
