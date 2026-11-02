@@ -33,6 +33,9 @@ mod config;
 mod desk;
 mod erp;
 mod model;
+// not wired into the run yet, see docs/design/vpn.md
+#[allow(dead_code)]
+mod tunnel;
 
 use config::Config;
 use serde_json::{Value, json};

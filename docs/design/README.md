@@ -16,6 +16,7 @@ Wayland ([decisions.md](decisions.md)).
 | [verification.md](verification.md) | How to write a subsystem so that its checks can prove it | Split it into a pure policy, threads, and I/O. Check the policy exhaustively, the threads with loom, and the I/O in NixOS VMs |
 | [verification-rationale.md](verification-rationale.md) | Why each verification rule exists | The fact each rule rests on, with its date; the tools left out; what would change the rules |
 | [measurements.md](measurements.md) | How each number was taken | Machine, versions, methods, caveats |
+| [vpn.md](vpn.md) | How agents' traffic goes through VPN tunnels | Proposed: one network namespace per WireGuard tunnel, agents spread across tunnels by default, with a limit per tunnel and a pin per task |
 
 ## Since 2026-10-31, the harness is the cost
 
