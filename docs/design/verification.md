@@ -114,7 +114,7 @@ loom's.
 | `now()` | Milliseconds since the first call | Always 0 |
 | `recv(&rx)` | Waits for a message; `Wait::Closed` when every sender is gone | The same |
 | `recv_timer(&rx, deadline)` | Waits for a message until `deadline`; then `Wait::Timer` | `Wait::Timer` at once if no message is queued |
-| `recv_reply(&rx, limit, what)` | Waits for a reply up to `limit`; the error names `what` | Waits with no limit |
+| `recv_reply(&rx, limit, what)` | Waits for a reply up to `limit`; the error names `what` | The timeout error at once if no reply is queued |
 
 ## Threads: one owner per state, checked with loom
 
@@ -128,7 +128,8 @@ loom's.
 5. Hold a lock only to copy or update its data. Do not hold it across I/O,
    a wait or another lock. Use a lock for data that one thread writes and
    other threads copy.
-6. Wait for a reply with `sync::recv_reply(&rx, limit, what)`.
+6. Wait for a reply with `sync::recv_reply(&rx, limit, what)`, and handle
+   its error. A late reply can still come after it.
 7. An owner waits for its next message with `sync::recv(&rx)`. If its
    policy has a deadline, it waits with `sync::recv_timer(&rx, deadline)`.
 8. Read the time only with `sync::now()`.

@@ -84,7 +84,7 @@ desk's and resd's policies:
 | 3. Import from `panoptes_sync` | loom can schedule only code that uses its types. The facade swaps std for loom with one cfg, so the code that loom checks is the code that ships |
 | 4. No decisions from an atomic | A decision from an atomic is a protocol across every memory order. A message to the owner is one step in its queue |
 | 5. Short locks | A lock held across I/O or a wait makes every other thread wait for that I/O |
-| 6. A limit on every reply wait | A lost reply becomes an error that names what the caller waited for, not a hang |
+| 6. A limit on every reply wait | A lost reply becomes an error that names what the caller waited for, not a hang. Under loom the timeout can fire at any point, so a model runs the caller's code after it too |
 | 7. Owners wait with no limit, or until a deadline | An owner with nothing to time is idle, not stuck |
 | 8, 9. Time from `sync::now()`; durations of zero in models | loom has no clock. With `now()` at 0 and every duration at zero, the model tries every order that a real clock allows |
 | 10. Scoped fan-outs stay out of models | loom has no `scope` |
@@ -101,8 +101,45 @@ checked against loom 0.7 on 2026-10-31:
 - loom's `recv_timeout` is `unimplemented!`. Under loom, `recv_timer` uses
   `try_recv` and returns the timer at once when nothing is queued, so loom
   tries the timer at every point.
-- Under loom, `recv_reply` waits with no limit, because loom reports a
-  deadlock itself.
+- For the same reason, `recv_reply` under loom uses `try_recv` and fails
+  at once when no reply is queued. Until 2026-11-01 it waited with no
+  limit, so no model ran a caller's code after a reply timeout. A TLA+
+  model showed it in 3 steps: a real reply wait times out while its replier
+  lives and nothing is queued. The cost of the fix: an owner that never
+  replies shows in a model as a timeout error, not as a loom deadlock.
+
+## The facade's channel is checked by loom models
+
+Every loom model trusts the facade's loom build, and its channel is the one
+part that loom does not supply. So the facade has loom models of its own, on
+the Rust that every other model runs on. On 2026-11-01, each bug planted in
+`src/lib.rs` failed one:
+
+| Planted bug | The model that failed, and how |
+|---|---|
+| `send` without `notify_one` | `a_send_wakes_a_recv_while_a_sender_lives`: deadlock |
+| The last `Sender` drop without `notify_one` | `the_last_sender_closes_the_channel_after_its_messages`: deadlock |
+| `recv` checks for Closed before the queue | `the_last_sender_closes_the_channel_after_its_messages`: wrong result |
+| `Drop for Receiver` drops the queue under the lock | `a_queued_message_can_hold_a_sender`: deadlock |
+| `recv_reply` with no limit | `a_reply_can_come_before_or_after_its_timeout`: loom tried one order |
+| `recv` or `try_recv` takes the newest message | `messages_come_out_in_order`: wrong result |
+| `try_recv` never reports a closed channel; `recv_timer` or `recv_reply` times out on one | `a_closed_channel_ends_each_wait`: wrong result |
+
+A `recv` with `if` where the code has `loop` fails no model, and cannot. loom
+0.7.2's `Condvar` never wakes spuriously (`src/rt/condvar.rs`), and the one
+receiver thread is the only one that takes messages. There is one receiver
+thread because std's `Receiver` is not `Sync`, so code that shares one does
+not build without loom. A `Sender` dropped while its thread panics skips the
+count, and a loom model fails at its first panic anyway.
+
+The facade had TLA+ specs of this channel and its waits until 2026-11-01. They
+found the `recv_reply` gap above. They went because TLC checked a copy written
+by hand, and these models run the Rust. Each bug planted in the specs fails a
+model here, except `if` for `loop`, and the queue drop is one the specs could
+not express. The cost: TLC tried every sequence of operations within small
+bounds, and these models try only the sequences they name. The description of
+[PR #9](https://github.com/panoptes-os/panoptes/pull/9) keeps the specs and
+TLC's results.
 
 ## I/O
 
@@ -133,7 +170,7 @@ The cfg is `panoptes_loom`, not loom's usual `loom`. tokio 1.54.1 gates its
 | Kani | Not in nixpkgs at the flake's pin. Exhaustive tests cover the small worlds a policy needs without another toolchain |
 | ThreadSanitizer | Safe Rust cannot data-race, and loom checks atomics more thoroughly |
 | ASan and Miri on Rust | Both need a nightly toolchain; the flake pins a stable one. Miri also cannot run raw system calls such as clone3 |
-| Veil, TLA+ | They check a model written by hand in a second language, which can drift from the code |
+| Veil, TLA+ | They check a model written by hand in a second language, which can drift from the code. The facade's case is above |
 | shuttle | Random schedules for protocols too large for loom. Split the protocol first |
 
 ## What would change the rules
